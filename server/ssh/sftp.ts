@@ -42,12 +42,9 @@ export class SshSftp {
    */
   async uploadFile(localPath: string, remotePath: string): Promise<void> {
     const sftp = await this.openSftp();
-    await new Promise<void>((resolve, reject) => {
-      sftp.fastPut(localPath, remotePath, (err?: Error | null) => {
-        if (err) reject(new SftpError(`上传 ${localPath} 失败: ${err.message}`, err));
-        else resolve();
-      });
-    });
+    // fastPut does not create remote directories; ensure the parent exists.
+    await this.ensureRemoteDir(sftp, parentDir(remotePath));
+    await this.fastPut(sftp, localPath, remotePath);
   }
 
   /**
@@ -58,33 +55,8 @@ export class SshSftp {
   async uploadDir(localRoot: string, remoteRoot: string): Promise<void> {
     const sftp = await this.openSftp();
 
-    const ensureDir = async (dir: string): Promise<void> => {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          sftp.mkdir(dir, (err?: Error | null) => {
-            if (err) reject(err);
-            else resolve();
-          });
-        });
-      } catch (err) {
-        if (!isEnoent(err)) throw err;
-        await ensureDir(parentDir(dir));
-        // Recurse once; if dir now exists mkdir is EEXIST → swallow.
-        try {
-          await new Promise<void>((resolve, reject) => {
-            sftp.mkdir(dir, (err?: Error | null) => {
-              if (err) reject(err);
-              else resolve();
-            });
-          });
-        } catch (retryErr) {
-          if (!isEexist(retryErr)) throw retryErr;
-        }
-      }
-    };
-
     const walk = async (localDir: string, remoteDir: string): Promise<void> => {
-      await ensureDir(remoteDir);
+      await this.ensureRemoteDir(sftp, remoteDir);
       const entries = await fs.readdir(localDir, { withFileTypes: true });
       for (const entry of entries) {
         const lp = join(localDir, entry.name);
@@ -92,28 +64,68 @@ export class SshSftp {
         if (entry.isDirectory()) {
           await walk(lp, rp);
         } else if (entry.isFile()) {
-          await new Promise<void>((resolve, reject) => {
-            sftp.fastPut(lp, rp, (err?: Error | null) => {
-              if (err) reject(new SftpError(`上传 ${lp} 失败: ${err.message}`, err));
-              else resolve();
-            });
-          });
+          await this.fastPut(sftp, lp, rp);
         }
       }
     };
 
     await walk(localRoot, remoteRoot);
   }
+
+  // -- internal -------------------------------------------------------------
+
+  private async fastPut(sftp: SFTPWrapper, localPath: string, remotePath: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      sftp.fastPut(localPath, remotePath, (err?: Error | null) => {
+        if (err) reject(new SftpError(`上传 ${localPath} 失败: ${err.message}`, err));
+        else resolve();
+      });
+    });
+  }
+
+  /**
+   * Recursively create a remote directory.
+   * FAILURE (dir already exists) is tolerated; ENOENT on a nested component
+   * → create the parent first, then retry.
+   */
+  private async ensureRemoteDir(sftp: SFTPWrapper, dir: string): Promise<void> {
+    try {
+      await this.mkdir(sftp, dir);
+    } catch (err) {
+      if (isAlreadyExists(err)) return; // 已存在，无需创建
+      if (!isEnoent(err)) throw err;
+      await this.ensureRemoteDir(sftp, parentDir(dir));
+      // Parent now in place; this mkdir may succeed or report FAILURE (exists).
+      try {
+        await this.mkdir(sftp, dir);
+      } catch (retryErr) {
+        if (!isAlreadyExists(retryErr)) throw retryErr;
+      }
+    }
+  }
+
+  private async mkdir(sftp: SFTPWrapper, dir: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      sftp.mkdir(dir, (err?: Error | null) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
 }
 
 // -- helpers -----------------------------------------------------------------
 
+// SFTP protocol error codes (draft-ietf-secsh-filexfer).
+const SSH_FX_NO_SUCH_FILE = 2;
+const SSH_FX_FAILURE      = 4;
+
 function isEnoent(err: unknown): boolean {
-  return err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT';
+  return err instanceof Error && (err as any).code === SSH_FX_NO_SUCH_FILE;
 }
 
-function isEexist(err: unknown): boolean {
-  return err instanceof Error && (err as NodeJS.ErrnoException).code === 'EEXIST';
+function isAlreadyExists(err: unknown): boolean {
+  return err instanceof Error && (err as any).code === SSH_FX_FAILURE;
 }
 
 function parentDir(p: string): string {

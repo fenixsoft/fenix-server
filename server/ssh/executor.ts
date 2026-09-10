@@ -88,7 +88,9 @@ export class SshExecutor {
           onOutput?.({ stream: 'stdout', data: text });
         });
 
-        stream.on('stderr', (data: Buffer | string) => {
+        // ssh2 exposes stderr as a Readable sub-stream on the channel,
+        // not as an event.
+        stream.stderr.on('data', (data: Buffer | string) => {
           const text = Buffer.isBuffer(data) ? data.toString('utf8') : data;
           stderrParts.push(text);
           onOutput?.({ stream: 'stderr', data: text });

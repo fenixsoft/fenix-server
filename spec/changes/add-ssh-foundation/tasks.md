@@ -52,14 +52,14 @@
 
 - [x] 2.1 编写 `shared/messages.ts`：C→S / S→C 消息判别联合与 payload 类型（覆盖 spec 列出的全部消息名）
 - [x] 2.2 编写 `shared/schema.ts`：任务清单 zod schema（含 id 唯一性、requires 存在性、commands 非空校验与默认值填充、错误列表输出）
-- [ ] 2.3 编写 `shared/schema.test.ts`：合法清单、重复 id、未知依赖、空命令四个场景的单测
+- [x] 2.3 编写 `shared/schema.test.ts`：合法清单、重复 id、未知依赖、空命令四个场景的单测
 
 ## 3. SSH 核心层
 
-- [ ] 3.1 编写 `server/ssh/connection.ts`：SshConnection 类（密码认证、状态机、可区分错误类别、keepalive、closed 事件、资源清理）
-- [ ] 3.2 编写 `server/ssh/executor.ts`：命令执行器（stdout/stderr 分流实时回调、退出码、channel 复用顺序执行、关闭后报错）
-- [ ] 3.3 编写 `server/ssh/sftp.ts`：单文件 fastPut 上传与递归目录上传（自动创建远端目录）
-- [ ] 3.4 编写 `tests/sshd/Dockerfile.sshd`（基底 ubuntu:24.04：安装 openssh-server、root 密码登录、随机密码注入、前台 sshd）与 `docker-compose.test.yml` 编排及容器等待工具
+- [x] 3.1 编写 `server/ssh/connection.ts`：SshConnection 类（密码认证、状态机、可区分错误类别、keepalive、closed 事件、资源清理）
+- [x] 3.2 编写 `server/ssh/executor.ts`：命令执行器（stdout/stderr 分流实时回调、退出码、channel 复用顺序执行、关闭后报错）
+- [x] 3.3 编写 `server/ssh/sftp.ts`：单文件 fastPut 上传与递归目录上传（自动创建远端目录）
+- [x] 3.4 编写 `tests/sshd/Dockerfile.sshd`（基底 ubuntu:24.04：安装 openssh-server、root 密码登录、随机密码注入、前台 sshd）与 `docker-compose.test.yml` 编排及容器等待工具
 - [ ] 3.5 编写集成测试 `connection.test.ts` / `executor.test.ts` / `sftp.test.ts` 覆盖 ssh-core spec 全部场景
 
 ## 4. 服务基础
