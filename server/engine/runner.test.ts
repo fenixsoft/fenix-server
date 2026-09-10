@@ -212,6 +212,16 @@ describe('transition 状态机合法性', () => {
     expect(transition('failed', 'fix')).toBe('fixing');
     expect(transition('running', 'fix')).toBeNull();
   });
+
+  it('start: fixing → running（修复后自动重跑）', () => {
+    expect(transition('fixing', 'start')).toBe('running');
+    expect(transition('fixing', 'succeed')).toBeNull();
+    expect(transition('fixing', 'skip')).toBeNull();
+  });
+
+  it('fail: fixing → failed（中止修复回退失败态）', () => {
+    expect(transition('fixing', 'fail')).toBe('failed');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -490,5 +500,39 @@ describe('TaskRunner 串行执行', () => {
     runner.retry('A');
     await runPromise;
     expect(runner.snapshot().states['A']).toBe('success');
+  });
+
+  it('失败上下文 + fix/revertFix：失败可查上下文，置 fixing 后 retry/skip 被忽略', async () => {
+    const { runner, executor } = setup([task('A'), task('B')]);
+    executor.setBehavior('echo B', { code: 7 });
+    const runPromise = runner.run(['A', 'B']);
+    await waitForDecision(runner, 'B');
+
+    // 失败上下文：失败阶段与命令原文可见
+    const ctx = runner.failureContext('B');
+    expect(ctx).not.toBeNull();
+    expect(ctx!.stage).toBe('command:1');
+    expect(ctx!.command).toBe('echo B');
+    // 未失败任务无上下文
+    expect(runner.failureContext('A')).toBeNull();
+
+    // fix → fixing；修复中 retry/skip 被忽略
+    expect(runner.fix('B')).toBe(true);
+    expect(runner.snapshot().states['B']).toBe('fixing');
+    runner.retry('B');
+    runner.skip('B');
+    expect(runner.snapshot().states['B']).toBe('fixing');
+
+    // revertFix → 回 failed，仍停等，skip 重新可用
+    expect(runner.revertFix('B')).toBe(true);
+    expect(runner.snapshot().states['B']).toBe('failed');
+    runner.skip('B');
+    await runPromise;
+
+    // 非失败/非停等任务 fix 无效
+    expect(runner.fix('A')).toBe(false);
+
+    // taskDef 提供元数据（claude_hint 等）
+    expect(runner.taskDef('B')?.title).toBe('B');
   });
 });
