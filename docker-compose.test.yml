@@ -1,0 +1,20 @@
+# Test environment for SSH integration tests.
+# Starts an openssh-server container on host port 2222.
+#
+#   docker compose -f docker-compose.test.yml up --build -d
+#   SSH_PASSWORD=<pw> npm run test:ssh
+#
+# The root password is injected via SSH_PASSWORD; when unset the container
+# generates a random one and prints it to its logs.
+
+services:
+  sshd:
+    build:
+      context: ./tests/sshd
+      dockerfile: Dockerfile.sshd
+    container_name: fenix-sshd-test
+    environment:
+      SSH_PASSWORD: ${SSH_PASSWORD:-}
+    ports:
+      - "2222:22"
+    restart: "no"
