@@ -1,0 +1,5 @@
+{
+  "status": "success",
+  "spec": "add-ssh-foundation",
+  "summary": "完成 fenix-server 地基层全部 13 个任务：TypeScript workspace（server/shared/web 占位，构建与测试链路）+ 共享 WebSocket 消息契约（10 C→S / 7 S→C 判别联合）与任务清单 zod schema（id 唯一/requires 存在性/默认值填充/错误列表）+ ssh2 封装层（SshConnection 状态机与错误类别、SshExecutor 流式分流执行、SshSftp 单文件与递归目录上传）+ docker compose 测试容器（ubuntu:24.04 openssh-server，7 个 SSH 集成测试真实容器验证）+ config.json 原子读写 + /ws WebSocket 消息路由 + Fastify 服务入口（仅监听 127.0.0.1、静态托管占位兜底、优雅退出、默认端口 3773）。全部 30 个测试通过（其中 12 个基于 fenix-sshd-test 容器的集成测试），tsc 构建零错误。19 个声明交付物全部按字面路径实现，无交付落点分歧；无前端可交互元素，交互契约空。"
+}

@@ -1,0 +1,26 @@
+# Test SSH server container — base image ubuntu:24.04
+# Root password is injected at runtime via the SSH_PASSWORD env var
+# (never baked into an image layer).
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        openssh-server \
+        openssl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Allow root password login, refuse key-only auth to keep tests deterministic.
+RUN mkdir -p /run/sshd \
+    && sed -i 's/^#*PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && sed -i 's/^#*PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && echo "UsePAM yes" >> /etc/ssh/sshd_config
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 22
+
+ENTRYPOINT ["/entrypoint.sh"]

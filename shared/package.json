@@ -1,0 +1,5 @@
+{
+  "name": "@fenix/shared",
+  "private": true,
+  "type": "module"
+}
