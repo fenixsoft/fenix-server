@@ -4,7 +4,7 @@
 
 ### Requirement: 本地服务启动与监听边界
 
-系统 SHALL 提供 Node.js 进程入口（`server/index.ts` 编译产物），启动 Fastify HTTP 服务并仅监听 `127.0.0.1` 的可配置端口（默认端口 SHALL 存在且不使用 20122）；服务启动成功后 SHALL 在日志中输出实际监听地址。
+系统 SHALL 提供 Node.js 进程入口（`server/index.ts` 编译产物），启动 Fastify HTTP 服务并仅监听 `127.0.0.1` 的可配置端口，**默认端口 3773**（与 `.fenix/verify.yaml` 验证契约一致，不使用 20122）；服务启动成功后 SHALL 在日志中输出实际监听地址；自动打开浏览器行为 SHALL 在无 TTY 或设置禁用环境变量时不触发（验证环境无头运行）。
 
 #### Scenario: 默认启动
 
