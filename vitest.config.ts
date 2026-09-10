@@ -10,9 +10,10 @@ export default defineConfig({
   },
   test: {
     passWithNoTests: true,
-    // Enable the globals so @testing-library/react can auto-register its
-    // afterEach cleanup (DOM is cleaned between component tests).
-    globals: true,
+    // NOTE: do not enable `globals` — vitest 3.x drops `ctx.skip()` from
+    // hook contexts when globals are on, which would break the integration
+    // suites that gracefully skip when the sshd test container is absent.
+    // Component tests call @testing-library/react cleanup() explicitly.
     // Register jest-dom matchers (toBeInTheDocument / toHaveStyle / …).
     setupFiles: ['./vitest.setup.ts'],
   },

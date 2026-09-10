@@ -63,7 +63,9 @@ export default function TaskTree() {
   const manifest = useAppStore((s) => s.manifest);
   const states = useAppStore((s) => s.taskStates);
   const selected = useAppStore((s) => s.selected);
+  const focusedTaskId = useAppStore((s) => s.focusedTaskId);
   const toggleTask = useAppStore((s) => s.toggleTask);
+  const focusTask = useAppStore((s) => s.focusTask);
   const { token } = theme.useToken();
 
   const grouped = useMemo(() => {
@@ -117,7 +119,18 @@ export default function TaskTree() {
               <Tooltip title={label}>
                 <span style={{ color, fontSize: 16, lineHeight: 1, fontFamily: 'monospace' }}>{icon}</span>
               </Tooltip>
-              <Text style={{ fontSize: 13 }}>{task.title}</Text>
+              <Text
+                style={{
+                  fontSize: 13,
+                  fontWeight: focusedTaskId === task.id ? 600 : undefined,
+                  cursor: 'pointer',
+                }}
+                onClick={() => {
+                  if (!blocked) focusTask(task.id);
+                }}
+              >
+                {task.title}
+              </Text>
               {status === 'failed' && <FailedTaskActions taskId={task.id} status={status} />}
             </div>
           );

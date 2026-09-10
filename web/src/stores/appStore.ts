@@ -98,6 +98,8 @@ export interface AppStore {
   currentTaskId: string | null;
   currentTaskTitle: string | null;
   awaitingDecision: string | null;
+  /** Task whose detail is shown in the detail panel (clicked row). */
+  focusedTaskId: string | null;
 
   // -- log ------------------------------------------------------------------
   logLines: LogLine[];
@@ -121,6 +123,7 @@ export interface AppStore {
   toggleTask(taskId: string): void;
   selectAll(): void;
   clearSelection(): void;
+  focusTask(taskId: string | null): void;
   exec(ids?: string[]): void;
   stop(): void;
   retry(taskId: string): void;
@@ -336,6 +339,7 @@ export const useAppStore = create<AppStore>()((set, get) => {
     currentTaskId: null,
     currentTaskTitle: null,
     awaitingDecision: null,
+    focusedTaskId: null,
 
     logLines: [],
     claudeOutput: '',
@@ -391,6 +395,7 @@ export const useAppStore = create<AppStore>()((set, get) => {
         currentTaskId: null,
         currentTaskTitle: null,
         awaitingDecision: null,
+        focusedTaskId: null,
         runStartedAt: null,
       });
     },
@@ -421,6 +426,7 @@ export const useAppStore = create<AppStore>()((set, get) => {
         currentTaskId: null,
         currentTaskTitle: null,
         awaitingDecision: null,
+        focusedTaskId: null,
         runStartedAt: null,
       });
       return { ok: true };
@@ -470,6 +476,7 @@ export const useAppStore = create<AppStore>()((set, get) => {
         currentTaskId: null,
         currentTaskTitle: null,
         awaitingDecision: null,
+        focusedTaskId: null,
         tunnel: null,
         tunnelTestResult: null,
         logLines: [],
@@ -503,6 +510,10 @@ export const useAppStore = create<AppStore>()((set, get) => {
       set({ selected: [] });
     },
 
+    focusTask(taskId) {
+      set({ focusedTaskId: taskId });
+    },
+
     exec(ids) {
       const tasks = get().manifest?.tasks ?? [];
       const target = ids ?? get().selected;
@@ -519,6 +530,7 @@ export const useAppStore = create<AppStore>()((set, get) => {
         currentTaskId: null,
         currentTaskTitle: null,
         awaitingDecision: null,
+        focusedTaskId: null,
         runStartedAt: Date.now(),
         lastError: null,
       });
