@@ -8,7 +8,7 @@
  *   - blocked tasks are disabled (greyed) until dependencies succeed
  */
 // @vitest-environment jsdom
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, within, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useAppStore } from '../stores/appStore';
@@ -108,5 +108,68 @@ describe('TaskTree', () => {
 
     await user.click(bCheckbox);
     expect(useAppStore.getState().selected).toContain('B');
+  });
+});
+
+describe('FailedTaskActions 三动作', () => {
+  it('失败任务显示 重试/交给 Claude 修复/跳过 三个动作', () => {
+    useAppStore.setState({ taskStates: { A: 'failed', B: 'pending', C: 'pending' } });
+    renderWithStore();
+
+    const aRow = row('A');
+    expect(within(aRow).getByText('重试')).toBeTruthy();
+    expect(within(aRow).getByText('交给 Claude 修复')).toBeTruthy();
+    expect(within(aRow).getByText('跳过')).toBeTruthy();
+  });
+
+  it('非失败任务不显示三动作', () => {
+    useAppStore.setState({ taskStates: { A: 'success', B: 'pending', C: 'pending' } });
+    renderWithStore();
+
+    const aRow = row('A');
+    expect(within(aRow).queryByText('重试')).toBeNull();
+    expect(within(aRow).queryByText('跳过')).toBeNull();
+  });
+
+  it('点击重试发送 retry 消息并把任务乐观置为 pending', async () => {
+    const user = userEvent.setup();
+    // spy 记录 wsClient 发出的消息（store 的 retry action 调用 wsClient.send）
+    const sendSpy = vi.spyOn((await import('../wsClient')).wsClient, 'send').mockImplementation(() => {});
+
+    useAppStore.setState({ taskStates: { A: 'failed', B: 'pending', C: 'pending' } });
+    renderWithStore();
+
+    await user.click(within(row('A')).getByText('重试'));
+
+    expect(sendSpy).toHaveBeenCalledWith({ type: 'retry', payload: { taskId: 'A' } });
+    expect(useAppStore.getState().taskStates.A).toBe('pending');
+    sendSpy.mockRestore();
+  });
+
+  it('点击跳过发送 skip 消息并把任务乐观置为 skipped', async () => {
+    const user = userEvent.setup();
+    const sendSpy = vi.spyOn((await import('../wsClient')).wsClient, 'send').mockImplementation(() => {});
+
+    useAppStore.setState({ taskStates: { A: 'failed', B: 'pending', C: 'pending' } });
+    renderWithStore();
+
+    await user.click(within(row('A')).getByText('跳过'));
+
+    expect(sendSpy).toHaveBeenCalledWith({ type: 'skip', payload: { taskId: 'A' } });
+    expect(useAppStore.getState().taskStates.A).toBe('skipped');
+    sendSpy.mockRestore();
+  });
+
+  it('点击交给 Claude 修复发送 fixWithClaude 消息', async () => {
+    const user = userEvent.setup();
+    const sendSpy = vi.spyOn((await import('../wsClient')).wsClient, 'send').mockImplementation(() => {});
+
+    useAppStore.setState({ taskStates: { A: 'failed', B: 'pending', C: 'pending' } });
+    renderWithStore();
+
+    await user.click(within(row('A')).getByText('交给 Claude 修复'));
+
+    expect(sendSpy).toHaveBeenCalledWith({ type: 'fixWithClaude', payload: { taskId: 'A' } });
+    sendSpy.mockRestore();
   });
 });

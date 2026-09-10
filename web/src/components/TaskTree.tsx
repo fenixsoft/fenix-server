@@ -14,6 +14,7 @@
 import { useMemo } from 'react';
 import { Checkbox, Collapse, Typography, Tooltip, theme } from 'antd';
 import { useAppStore } from '../stores/appStore';
+import FailedTaskActions from './FailedTaskActions';
 import type { Task } from '@fenix/shared/schema';
 import type { TaskStatus } from '@fenix/shared/messages';
 
@@ -117,6 +118,7 @@ export default function TaskTree() {
                 <span style={{ color, fontSize: 16, lineHeight: 1, fontFamily: 'monospace' }}>{icon}</span>
               </Tooltip>
               <Text style={{ fontSize: 13 }}>{task.title}</Text>
+              {status === 'failed' && <FailedTaskActions taskId={task.id} status={status} />}
             </div>
           );
         }),
