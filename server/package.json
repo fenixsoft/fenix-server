@@ -1,4 +1,5 @@
 {
   "name": "@fenix/server",
-  "private": true
+  "private": true,
+  "type": "module"
 }

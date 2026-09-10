@@ -45,13 +45,13 @@
 
 ## 1. 工程骨架
 
-- [ ] 1.1 初始化 npm workspace：`package.json`（scripts：build/test/start）、`tsconfig.base.json`、`tsconfig.server.json`，安装 fastify/@fastify/static/ws/ssh2/zod/yaml/typescript/vitest 及类型依赖
-- [ ] 1.2 建立 `shared/`、`server/` 目录结构与路径别名（shared 以源码引用），验证空构建与空测试跑通
+- [x] 1.1 初始化 npm workspace：`package.json`（scripts：build/test/start）、`tsconfig.base.json`、`tsconfig.server.json`，安装 fastify/@fastify/static/ws/ssh2/zod/yaml/typescript/vitest 及类型依赖
+- [x] 1.2 建立 `shared/`、`server/` 目录结构与路径别名（shared 以源码引用），验证空构建与空测试跑通
 
 ## 2. 共享契约
 
-- [ ] 2.1 编写 `shared/messages.ts`：C→S / S→C 消息判别联合与 payload 类型（覆盖 spec 列出的全部消息名）
-- [ ] 2.2 编写 `shared/schema.ts`：任务清单 zod schema（含 id 唯一性、requires 存在性、commands 非空校验与默认值填充、错误列表输出）
+- [x] 2.1 编写 `shared/messages.ts`：C→S / S→C 消息判别联合与 payload 类型（覆盖 spec 列出的全部消息名）
+- [x] 2.2 编写 `shared/schema.ts`：任务清单 zod schema（含 id 唯一性、requires 存在性、commands 非空校验与默认值填充、错误列表输出）
 - [ ] 2.3 编写 `shared/schema.test.ts`：合法清单、重复 id、未知依赖、空命令四个场景的单测
 
 ## 3. SSH 核心层

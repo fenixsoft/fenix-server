@@ -114,16 +114,37 @@ export type ParseResult =
 /**
  * Parse and validate a raw task manifest (e.g. deserialized YAML).
  * On failure returns a structured error list (path + reason) instead of
- * throwing a single exception.
+ * throwing a single exception. Task-scoped errors use the task `id`
+ * (not the numeric index) in the path so consumers can identify the task.
  */
 export function parseTaskManifest(input: unknown): ParseResult {
   const parsed = taskManifestSchema.safeParse(input);
   if (parsed.success) {
     return { ok: true, manifest: parsed.data };
   }
-  const errors: SchemaError[] = parsed.error.issues.map((issue) => ({
-    path: issue.path.length > 0 ? issue.path.join('.') : '(root)',
-    reason: issue.message,
-  }));
+  const errors: SchemaError[] = parsed.error.issues.map((issue) => {
+    let path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+    // Task-scoped issues have path shape ['tasks', <index>, ...].
+    if (issue.path[0] === 'tasks' && typeof issue.path[1] === 'number') {
+      const index = issue.path[1];
+      const taskId = taskIdAt(input, index);
+      const rest = issue.path.slice(2).join('.');
+      path = taskId !== undefined
+        ? `tasks.${taskId}${rest ? `.${rest}` : ''}`
+        : issue.path.map((p) => String(p)).join('.');
+    }
+    return { path, reason: issue.message };
+  });
   return { ok: false, errors };
+}
+
+/** Resolve the task `id` at a given index from the raw manifest input. */
+function taskIdAt(input: unknown, index: number): string | undefined {
+  if (!isObject(input) || !Array.isArray(input.tasks)) return undefined;
+  const task = input.tasks[index];
+  return isObject(task) && typeof task.id === 'string' ? task.id : undefined;
+}
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
 }
