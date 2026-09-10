@@ -24,4 +24,4 @@
 
 - [x] 2.1 编写 `server/engine/fixer.ts`：fixer.start（可用性检测 → 上下文提示词构造 8KB 截断 → PTY 启动 claude → fixing 状态 → 输出转发 → 退出自动 retry）、abort、单会话约束、claude 缺失明确报错
 - [x] 2.2 编写 `server/ssh/fixtures/mock-claude.sh`：可配置行为的 mock（输出序列、stdin 回显、退出码、argv/prompt 记录到文件）
-- [ ] 2.3 编写 `fixer.test.ts`：提示词完整性、fixing 状态、修复成功队列继续、重跑仍失败回 failed、中止回退、单会话拒绝、claude 缺失报错
+- [x] 2.3 编写 `fixer.test.ts`：提示词完整性、fixing 状态、修复成功队列继续、重跑仍失败回 failed、中止回退、单会话拒绝、claude 缺失报错
