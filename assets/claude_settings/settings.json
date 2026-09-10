@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "WebFetch",
+      "WebFetchtool"
+    ]
+  },
+  "env": {
+    "PATH": "/usr/local/bin:/usr/bin:/bin"
+  },
+  "model": "claude-sonnet-5",
+  "statusLine": {
+    "type": "command",
+    "command": "claude -f statusline.json"
+  }
+}

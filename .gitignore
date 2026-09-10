@@ -3,3 +3,6 @@ dist/
 config.json
 *.log
 .DS_Store
+
+# E2E 运行时产物（失败快照）
+tests/e2e/out/

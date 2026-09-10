@@ -1,0 +1,39 @@
+# tests/e2e/Dockerfile.sshd
+#
+# 集成级测试容器——ubuntu:24.04 + openssh-server。
+# 无 systemd：entrypoint 直接前台启动 sshd，root 密码运行时注入。
+# 供前序 SPEC 的 ssh/runner 集成测试统一复用（与 Dockerfile.systemd 同镜像族）。
+#
+# 用法：
+#   docker build -f tests/e2e/Dockerfile.sshd -t fenix-e2e-sshd .
+#   docker run --rm -e SSH_PASSWORD=secret -p 2222:22 fenix-e2e-sshd
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 安装 openssh-server 与集成测试常用工具
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        openssh-server \
+        openssl \
+        iproute2 \
+        curl \
+        netcat-openbsd \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 允许 root 密码登录；保留密钥登录默认，测试主体用密码
+RUN mkdir -p /run/sshd \
+    && sed -i 's/^#*PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && sed -i 's/^#*PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && sed -i 's/^#*PubkeyAuthentication .*/PubkeyAuthentication yes/' /etc/ssh/sshd_config \
+    && echo "UsePAM no" >> /etc/ssh/sshd_config
+
+# entrypoint：注入 root 密码（SSH_PASSWORD，缺省随机）并前台启动 sshd
+COPY entrypoint-sshd.sh /entrypoint-sshd.sh
+RUN chmod +x /entrypoint-sshd.sh
+
+EXPOSE 22
+
+ENTRYPOINT ["/entrypoint-sshd.sh"]

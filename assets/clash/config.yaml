@@ -1,0 +1,39 @@
+# clash/config.yaml
+#
+# Mihomo (Clash Meta) 代理配置 —— 订阅配置待用户提供。
+#
+# ⚠️ 注意（design.md Open Questions）：
+#   本文件当前为占位配置（仅监听端口与 API 面板），不含真实订阅节点。
+#   请将用户服务器上的 /root/.config/clash/config.yaml 内容拷贝到此，
+#   或填入有效的 proxies / proxy-providers 订阅配置后再执行 install-clash。
+#   订阅缺失时 install-clash 任务的 systemctl start 可能失败，
+#   E2E 中允许该任务标记 skipped（见 docs/acceptance.md）。
+
+# 混合代理端口（HTTP/SOCKS）
+mixed-port: 20122
+
+# 外部控制面板
+external-controller: 127.0.0.1:9090
+
+# 日志等级
+log-level: info
+
+# DNS 配置
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+
+# 代理组（占位，订阅就绪后填充）
+proxies: []
+
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - DIRECT
+
+rules:
+  - MATCH,PROXY
