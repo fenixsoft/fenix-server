@@ -85,6 +85,20 @@ export interface RunnerSnapshot {
   completed: number;
 }
 
+/**
+ * 失败任务的修复上下文 —— 由 runner 在任务失败时记录，
+ * fixer 用于构造 Claude 修复提示词（add-claude-fallback）。
+ */
+export interface FailureContext {
+  taskId: string;
+  /** 失败阶段：'upload' | `command:N`（1 基命令序号）| 'verify'。 */
+  stage: string;
+  /** 失败的命令原文；upload 阶段为空串。 */
+  command: string;
+  /** 收集到的错误输出尾部（截头留尾，上限由 runner 内部滚动缓冲决定）。 */
+  errorTail: string;
+}
+
 // ---------------------------------------------------------------------------
 //  Centralised state transition table
 // ---------------------------------------------------------------------------
@@ -93,23 +107,25 @@ export type TaskEvent = 'start' | 'succeed' | 'fail' | 'skip' | 'fix';
 
 /**
  * Legal state transitions:
- *   pending | failed  --start--> running   (initial run and retry)
- *   running           --succeed--> success
- *   running           --fail--> failed
- *   failed | pending  --skip--> skipped
- *   failed            --fix--> fixing      (reserved for add-claude-fallback)
+ *   pending | failed | fixing --start--> running   (initial run, retry, fix-retry)
+ *   running                          --succeed--> success
+ *   running | fixing                 --fail--> failed
+ *   failed | pending                 --skip--> skipped
+ *   failed                           --fix--> fixing   (add-claude-fallback)
  *
  * Returns null for illegal transitions; `skipped` is only reachable from
- * failed/pending, never from running/success.
+ * failed/pending, never from running/success. `fixing` is entered from
+ * failed (Claude 修复会话), and leaves via start（修复后重跑）或
+ * fail（中止修复回退失败态）。
  */
 export function transition(current: TaskStatus, event: TaskEvent): TaskStatus | null {
   switch (event) {
     case 'start':
-      return current === 'pending' || current === 'failed' ? 'running' : null;
+      return current === 'pending' || current === 'failed' || current === 'fixing' ? 'running' : null;
     case 'succeed':
       return current === 'running' ? 'success' : null;
     case 'fail':
-      return current === 'running' ? 'failed' : null;
+      return current === 'running' || current === 'fixing' ? 'failed' : null;
     case 'skip':
       return current === 'failed' || current === 'pending' ? 'skipped' : null;
     case 'fix':
@@ -139,6 +155,12 @@ export class TaskRunner extends EventEmitter {
   private decisionWaiter: { resolve: (d: 'retry' | 'skip' | 'stop') => void } | null = null;
   /** State captured at the moment a run is stopped (before queue reset). */
   private _stopCapture: RunnerSnapshot | null = null;
+
+  /** 任务失败时的修复上下文（add-claude-fallback 消费）。 */
+  private readonly failureContexts = new Map<string, FailureContext>();
+  /** 每任务输出滚动缓冲：保留最近 N 字节供「错误输出尾部」提取。 */
+  private readonly outputTails = new Map<string, string>();
+  private static readonly OUTPUT_TAIL_CAP = 16 * 1024;
 
   constructor(options: TaskRunnerOptions) {
     super();
@@ -202,6 +224,8 @@ export class TaskRunner extends EventEmitter {
     this.abortController = new AbortController();
     this.running = true;
     this._stopCapture = null;
+    this.failureContexts.clear();
+    this.outputTails.clear();
 
     this.emitProgress();
 
@@ -221,13 +245,59 @@ export class TaskRunner extends EventEmitter {
   /** Re-run the failed task currently awaiting a decision. No-op otherwise. */
   retry(taskId: string): void {
     if (this.awaitingDecision !== taskId) return;
+    // 修复进行中禁止手动重试（重试语义由 fixer 经 retryAfterFix 接管）。
+    if (this.states[taskId] === 'fixing') return;
+    this.decisionWaiter?.resolve('retry');
+  }
+
+  /**
+   * 修复会话结束后的自动重跑（fixer 调用）：绕过 fixing 期手动重试守卫，
+   * 直接以 'retry' 决策驱动队列重跑该任务。
+   */
+  retryAfterFix(taskId: string): void {
+    if (this.awaitingDecision !== taskId) return;
     this.decisionWaiter?.resolve('retry');
   }
 
   /** Mark the failed task skipped and continue with the rest of the queue. */
   skip(taskId: string): void {
     if (this.awaitingDecision !== taskId) return;
+    if (this.states[taskId] === 'fixing') return;
     this.decisionWaiter?.resolve('skip');
+  }
+
+  /**
+   * 把停等中的失败任务置为 fixing（Claude 修复会话开始）。
+   * 仅当该任务处于停等（awaitingDecision）且状态为 failed 时生效。
+   */
+  fix(taskId: string): boolean {
+    if (this.awaitingDecision !== taskId) return false;
+    if (this.states[taskId] !== 'failed') return false;
+    this.applyTransition(taskId, 'fix');
+    return true;
+  }
+
+  /**
+   * 中止修复：把 fixing 状态的任务置回 failed（fixer.abort / PTY 异常）。
+   * 仅当任务处于 fixing 时生效。
+   */
+  revertFix(taskId: string): boolean {
+    if (this.states[taskId] !== 'fixing') return false;
+    this.applyTransition(taskId, 'fail');
+    return true;
+  }
+
+  /**
+   * 返回任务的失败修复上下文（本 run 内失败时记录）。
+   * 无上下文（未失败 / 未在本 run 内）返回 null —— fixer 据此拒绝修复。
+   */
+  failureContext(taskId: string): FailureContext | null {
+    return this.failureContexts.get(taskId) ?? null;
+  }
+
+  /** 返回 manifest 中任务定义（标题、描述、claude_hint 等元数据）。 */
+  taskDef(taskId: string): TaskManifest['tasks'][number] | undefined {
+    return this.manifest.tasks.find((t) => t.id === taskId);
   }
 
   /**
@@ -315,6 +385,7 @@ export class TaskRunner extends EventEmitter {
       this.states[taskId] = 'failed';
       this.emit('task-state', taskId, 'failed');
       this.log(taskId, 'stderr', `未知任务 id: ${taskId}`);
+      this.recordFailure(taskId, 'command:0', '');
       return 'failed';
     }
 
@@ -333,13 +404,15 @@ export class TaskRunner extends EventEmitter {
         } catch (err) {
           this.log(taskId, 'stderr', `文件上传失败（${file}）: ${(err as Error).message}`);
           this.applyTransition(taskId, 'fail');
+          this.recordFailure(taskId, 'upload', file);
           return 'failed';
         }
       }
     }
 
     // -- 2. commands --------------------------------------------------------
-    for (const cmd of task.commands) {
+    for (let idx = 0; idx < task.commands.length; idx++) {
+      const cmd = task.commands[idx];
       if (this.abortSignal().aborted) {
         this.applyTransition(taskId, 'fail');
         return 'failed';
@@ -357,6 +430,7 @@ export class TaskRunner extends EventEmitter {
         }
         this.log(taskId, 'stderr', `命令执行失败: ${(err as Error).message}（命令: ${cmd}）`);
         this.applyTransition(taskId, 'fail');
+        this.recordFailure(taskId, `command:${idx + 1}`, cmd);
         return 'failed';
       }
       if (this.abortSignal().aborted) {
@@ -366,6 +440,7 @@ export class TaskRunner extends EventEmitter {
       if (result.code !== 0) {
         this.log(taskId, 'stderr', `命令退出码非 0（${result.code}）: ${cmd}`);
         this.applyTransition(taskId, 'fail');
+        this.recordFailure(taskId, `command:${idx + 1}`, cmd);
         return 'failed';
       }
     }
@@ -389,6 +464,7 @@ export class TaskRunner extends EventEmitter {
         }
         this.log(taskId, 'stderr', `verify 执行失败: ${(err as Error).message}`);
         this.applyTransition(taskId, 'fail');
+        this.recordFailure(taskId, 'verify', task.verify);
         return 'failed';
       }
       if (this.abortSignal().aborted) {
@@ -398,6 +474,7 @@ export class TaskRunner extends EventEmitter {
       if (result.code !== 0) {
         this.log(taskId, 'stderr', `verify 命令退出码非 0（${result.code}）: ${task.verify}`);
         this.applyTransition(taskId, 'fail');
+        this.recordFailure(taskId, 'verify', task.verify);
         return 'failed';
       }
     }
@@ -446,6 +523,20 @@ export class TaskRunner extends EventEmitter {
 
   private log(taskId: string, stream: StreamTag, data: string): void {
     this.emit('log', { taskId, stream, data });
+    // 滚动输出尾部：保留最近 16KB 供修复提示词的错误输出截取。
+    const prev = this.outputTails.get(taskId) ?? '';
+    const next = prev + data;
+    const cap = TaskRunner.OUTPUT_TAIL_CAP;
+    this.outputTails.set(taskId, next.length > cap ? next.slice(-cap) : next);
+  }
+
+  private recordFailure(taskId: string, stage: string, command: string): void {
+    this.failureContexts.set(taskId, {
+      taskId,
+      stage,
+      command,
+      errorTail: this.outputTails.get(taskId) ?? '',
+    });
   }
 }
 
