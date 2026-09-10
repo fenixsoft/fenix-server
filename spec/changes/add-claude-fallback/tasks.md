@@ -18,7 +18,7 @@
 ## 1. PTY 会话层
 
 - [x] 1.1 编写 `server/ssh/pty.ts`：PtySession（open/write/resize/close、输出分片回调、退出码检测、主动终止、连接复用）
-- [ ] 1.2 编写 `pty.test.ts`（ubuntu:24.04 sshd 集成容器 + mock 脚本）：输出/退出检测、stdin 写入回显、主动终止、连接复用
+- [x] 1.2 编写 `pty.test.ts`（ubuntu:24.04 sshd 集成容器 + mock 脚本）：输出/退出检测、stdin 写入回显、主动终止、连接复用
 
 ## 2. 修复编排
 
