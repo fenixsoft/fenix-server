@@ -1,0 +1,47 @@
+# tests/e2e/docker-compose.e2e.yml
+#
+# E2E 级测试编排——ubuntu:24.04 特权 systemd 容器（构建配置 + 手动启动参考）。
+#
+# ⚠️ 重要：systemd 作为 PID1 需要 host cgroup namespace。docker compose 5.4
+# 的 schema 不支持 `cgroupns` 字段（会报 additional properties not allowed），
+# 因此本 compose 仅用于**构建镜像**与手动参考：
+#
+#   # 方式一（推荐，测试自足）：直接运行 e2e.test.ts，测试内部用
+#   #   `docker run --cgroupns=host` 启动容器，无需本文件。
+#   npx vitest run tests/e2e/e2e.test.ts
+#
+#   # 方式二（手动参考）：如要手工启动容器，请用 docker run：
+#   docker build -t fenix-e2e-systemd -f tests/e2e/Dockerfile.systemd tests/e2e
+#   docker run -d --name fenix-e2e-test --privileged --cgroupns=host \
+#     -e SSH_PASSWORD=e2epass123 --tmpfs /run --tmpfs /tmp \
+#     -v /sys/fs/cgroup:/sys/fs/cgroup:rw -p 2322:22 fenix-e2e-systemd
+#
+# 注意：若直接 `docker compose up`，容器可能因缺 host cgroupns 使 systemd
+# 退出（exit 255），属已知限制（见 design.md Risks）。
+
+services:
+  e2e:
+    build:
+      context: ./../..
+      dockerfile: tests/e2e/Dockerfile.systemd
+    container_name: fenix-e2e-test
+    image: fenix-e2e-systemd:latest
+    environment:
+      # root 密码：可在 .env 或命令行用 SSH_PASSWORD 覆盖（默认 e2epass123）
+      SSH_PASSWORD: ${SSH_PASSWORD:-e2epass123}
+    # 特权容器：systemd 需要
+    privileged: true
+    # systemd 要求 tmpfs 与 cgroup 挂载
+    tmpfs:
+      - /run
+      - /tmp
+    volumes:
+      # cgroup 挂载（rw，允许 systemd 管理服务）
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    ports:
+      # 宿主机 2322 → 容器 22（可用 E2E_SSH_PORT 覆盖）
+      - "${E2E_SSH_PORT:-2322}:22"
+    # systemd 作为 PID1，不要 restart（save/stop 由测试控制）
+    restart: "no"
+    # systemd 日志量大，测试靠 docker logs 捞取
+    stop_signal: SIGRTMIN+3

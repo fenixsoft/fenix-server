@@ -1,0 +1,354 @@
+# assets/tasks.yaml
+#
+# 内置默认任务清单 —— 由 task.md 逐节转换（add-builtin-tasks-e2e SPEC）。
+#
+# 要点（design §4.3）：
+#   - install-claude-code 排最前且无前置（满足"先装 Claude Code，失败可回退"）
+#   - 全部海外网络任务标 needs_proxy: true（不依赖服务器 Clash 顺序）
+#   - requires 构成有效 DAG，关键任务带 verify 与 claude_hint
+#
+# schema 见 shared/schema.ts（taskManifestSchema）。
+
+meta:
+  name: fenix-server-init
+  version: "1.0"
+
+tasks:
+  # --------------------------------------------------------------------------
+  # 0. Claude Code 安装（无前置，最先可执行）
+  # --------------------------------------------------------------------------
+  - id: install-claude-code
+    title: 安装 Claude Code
+    group: Claude Code
+    description: 检查并安装 Node.js，通过 npm 全局安装 Claude Code，复制配置文件。
+    commands:
+      - "cd /root/server-init && bash install-claude-code.sh"
+    verify: "command -v claude && claude --version"
+    needs_proxy: true
+    requires: []
+    files:
+      - install-claude-code.sh
+      - claude_settings/.claude.json
+      - claude_settings/settings.json
+    claude_hint: "按 /etc/os-release 的 VERSION_CODENAME 检查 NodeSource 源；npm 下载慢可配置镜像 registry"
+
+  # --------------------------------------------------------------------------
+  # 1. 系统基础配置
+  # --------------------------------------------------------------------------
+  - id: apt-aliyun-mirror
+    title: 设置阿里云 APT 源
+    group: 系统基础配置
+    description: 将默认 Ubuntu 官方源替换为阿里云镜像源，加速软件包下载。
+    commands:
+      - "cp /etc/apt/sources.list /etc/apt/sources.list.bak"
+      - |
+        cat > /etc/apt/sources.list << 'EOF'
+        deb http://mirrors.aliyun.com/ubuntu/ noble main restricted
+        deb http://mirrors.aliyun.com/ubuntu/ noble-updates main restricted
+        deb http://mirrors.aliyun.com/ubuntu/ noble universe
+        deb http://mirrors.aliyun.com/ubuntu/ noble-updates universe
+        deb http://mirrors.aliyun.com/ubuntu/ noble multiverse
+        deb http://mirrors.aliyun.com/ubuntu/ noble-updates multiverse
+        deb http://mirrors.aliyun.com/ubuntu/ noble-backports main restricted universe multiverse
+        deb http://mirrors.aliyun.com/ubuntu/ noble-security main restricted
+        deb http://mirrors.aliyun.com/ubuntu/ noble-security universe
+        deb http://mirrors.aliyun.com/ubuntu/ noble-security multiverse
+        EOF
+      - "apt update"
+    verify: "grep -q mirrors.aliyun.com /etc/apt/sources.list && apt-get update -qq"
+    needs_proxy: false
+    requires: []
+    claude_hint: "源代号按 VERSION_CODENAME 调整（24.04=noble，22.04=jammy）；网络不通时检查 /etc/apt/sources.list 语法"
+
+  # --------------------------------------------------------------------------
+  # 2. 基础工具安装（无网络依赖）
+  # --------------------------------------------------------------------------
+  - id: install-base-tools
+    title: 安装常用工具
+    group: 基础工具安装
+    description: 安装 zip、unzip、zlib1g-dev、net-tools、git 等基础开发运维工具包。
+    commands:
+      - "apt install -y zip unzip zlib1g-dev net-tools git"
+    verify: "git --version && zip -v | head -1"
+    needs_proxy: false
+    requires:
+      - apt-aliyun-mirror
+
+  - id: config-git
+    title: 配置 Git 用户信息
+    group: 基础工具安装
+    description: 设置 Git 全局用户名和邮箱。
+    commands:
+      - "git config --global user.name 'icyfenix'"
+      - "git config --global user.email 'icyfenix@gamil.com'"
+    verify: "git config --global --list | grep -q 'user.name=icyfenix'"
+    needs_proxy: false
+    requires:
+      - install-base-tools
+
+  - id: install-python
+    title: 安装 Python3 开发环境
+    group: 基础工具安装
+    description: 安装 Python3、pip 与虚拟环境支持。
+    commands:
+      - "apt install -y python3 python3-pip python3-venv"
+    verify: "python3 --version"
+    needs_proxy: false
+    requires:
+      - apt-aliyun-mirror
+
+  # --------------------------------------------------------------------------
+  # 3. Shell 环境配置
+  # --------------------------------------------------------------------------
+  - id: install-zsh
+    title: 安装 ZSH 并设为默认 Shell
+    group: Shell 环境配置
+    description: 安装 Zsh 并将其设置为 root 用户的默认 shell。
+    commands:
+      - "apt install -y zsh"
+      - "chsh -s $(which zsh) root"
+    verify: "getent passwd root | cut -d: -f7 | grep -q zsh"
+    needs_proxy: false
+    requires:
+      - install-base-tools
+
+  - id: install-ohmyzsh
+    title: 安装 Oh My Zsh
+    group: Shell 环境配置
+    description: 使用本地安装脚本安装 Oh My Zsh 框架。
+    commands:
+      - "REPO=fenixsoft/ohmyzsh sh /root/server-init/zsh_settings/install_ohmyzsh.sh --unattended"
+    verify: "test -d ~/.oh-my-zsh"
+    needs_proxy: false
+    requires:
+      - install-zsh
+    files:
+      - zsh_settings/install_ohmyzsh.sh
+    claude_hint: "REPO 环境变量用于国内镜像仓库；--unattended 跳过交互提示"
+
+  - id: install-zsh-plugins
+    title: 安装 ZSH 插件
+    group: Shell 环境配置
+    description: 安装 zsh-autosuggestions 与 zsh-syntax-highlighting 插件。
+    commands:
+      - "git clone https://github.com/zsh-users/zsh-autosuggestions ~/.oh-my-zsh/custom/plugins/zsh-autosuggestions || true"
+      - "git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting || true"
+    verify: "test -d ~/.oh-my-zsh/custom/plugins/zsh-autosuggestions && test -d ~/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting"
+    needs_proxy: true
+    requires:
+      - install-ohmyzsh
+    claude_hint: "插件目录约定 ~/.oh-my-zsh/custom/plugins/；git clone 需代理；目录已存在时报 non-empty directory，可跳过"
+
+  - id: install-fzf
+    title: 安装 FZF
+    group: Shell 环境配置
+    description: 安装 fzf 命令行模糊搜索工具。
+    commands:
+      - "apt install -y fzf"
+    verify: "fzf --version"
+    needs_proxy: false
+    requires:
+      - install-zsh
+
+  - id: config-zshrc
+    title: 配置 ZSHRC
+    group: Shell 环境配置
+    description: 复制预配置的 .zshrc 文件（主题 ys、插件、fzf 快捷键、cc() 函数）。
+    commands:
+      - "cp /root/server-init/zsh_settings/.zshrc ~/.zshrc"
+    verify: "grep -q '^plugins=(' ~/.zshrc && grep -q 'zsh-autosuggestions' ~/.zshrc"
+    needs_proxy: false
+    requires:
+      - install-ohmyzsh
+      - install-zsh-plugins
+      - install-fzf
+    files:
+      - zsh_settings/.zshrc
+    claude_hint: "插件写在 plugins=(...) 内（extract zsh-autosuggestions zsh-syntax-highlighting）；主题 ys"
+
+  # --------------------------------------------------------------------------
+  # 4. 网络代理配置（Clash / Mihomo）
+  # --------------------------------------------------------------------------
+  - id: install-clash
+    title: 安装 Clash 代理服务
+    group: 网络代理配置
+    description: 安装 Mihomo(Clash Meta)，配置订阅，设置开机启动并开放代理端口。
+    commands:
+      - "mkdir -p /opt/clash"
+      - "curl -fsSL -o /tmp/clash.gz https://github.com/MetaCubeX/mihomo/releases/download/v1.18.10/mihomo-linux-amd64-v1.18.10.gz"
+      - "gunzip -c /tmp/clash.gz > /opt/clash/clash"
+      - "chmod +x /opt/clash/clash"
+      - "ln -sf /opt/clash/clash /usr/local/bin/clash"
+      - |
+        cat > /etc/systemd/system/clash.service << 'EOF'
+        [Unit]
+        Description=Clash Proxy Service
+        After=network.target
+
+        [Service]
+        Type=simple
+        ExecStart=/usr/local/bin/clash -d /root/.config/clash
+        Restart=on-failure
+        RestartSec=5s
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+      - "mkdir -p ~/.config/clash"
+      - "cp /root/server-init/clash/config.yaml ~/.config/clash/config.yaml"
+      - "systemctl daemon-reload"
+      - "systemctl enable clash"
+      - "systemctl start clash"
+      - "git config --global http.proxy http://127.0.0.1:20122"
+      - "git config --global https.proxy http://127.0.0.1:20122"
+    verify: "test -x /usr/local/bin/clash && git config --global --list | grep -q http.proxy"
+    needs_proxy: true
+    requires:
+      - install-base-tools
+    files:
+      - clash/config.yaml
+    claude_hint: "订阅配置缺失时 systemctl start 会失败；检查 ~/.config/clash/config.yaml 内容；git 代理 20122 为 mixed-port"
+
+  # --------------------------------------------------------------------------
+  # 5. 需要代理的软件安装
+  # --------------------------------------------------------------------------
+  - id: install-docker
+    title: 安装 Docker
+    group: 需要代理的软件安装
+    description: 安装 Docker 容器引擎及相关组件。
+    commands:
+      - "mkdir -p /etc/apt/keyrings"
+      - "curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc"
+      - "chmod a+r /etc/apt/keyrings/docker.asc"
+      - |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+      - "apt update"
+      - "apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+    verify: "docker --version"
+    needs_proxy: true
+    requires:
+      - apt-aliyun-mirror
+    claude_hint: "GPG 下载需代理；docker.asc 路径 /etc/apt/keyrings/docker.asc；在容器内不启动 dockerd 守护，仅验证版本"
+
+  - id: install-gh-cli
+    title: 安装 GitHub CLI (gh)
+    group: 需要代理的软件安装
+    description: 安装 GitHub 官方命令行工具。
+    commands:
+      - |
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+      - "chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg"
+      - |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+      - "apt update && apt install gh -y"
+    verify: "gh --version"
+    needs_proxy: true
+    requires:
+      - install-base-tools
+    claude_hint: "keyring 下载需代理；源文件 /etc/apt/sources.list.d/github-cli.list"
+
+  - id: install-playwright
+    title: 安装 Playwright CLI 和 Headless Chrome
+    group: 需要代理的软件安装
+    description: 安装 Playwright 浏览器自动化工具、Chrome 浏览器与 playwright-cli skill。
+    commands:
+      - "npm install -g playwright"
+      - "npm install -g @playwright/cli@latest"
+      - "mkdir -p /etc/playwright && echo '{}' > /etc/playwright/cli.config.json"
+      - "playwright-cli install-browser chrome"
+      - "playwright install chromium"
+      - "playwright install-deps chromium"
+      - "mkdir -p ~/.claude/skills/playwright-cli"
+      - "curl -fsSL https://raw.githubusercontent.com/microsoft/playwright-cli/main/skills/playwright-cli/SKILL.md -o ~/.claude/skills/playwright-cli/SKILL.md"
+    verify: "playwright --version && playwright-cli --version"
+    needs_proxy: true
+    requires:
+      - install-base-tools
+      - install-claude-code
+    claude_hint: "npm 与浏览器下载需代理；Chrome 为 playwright-cli 需要的标准 Chrome（非 Chromium）；浏览器缓存 ~/.cache/ms-playwright"
+
+  - id: install-superpowers
+    title: 安装 Claude Code Superpowers 插件
+    group: 需要代理的软件安装
+    description: 安装 Superpowers - Claude Code 核心技能库。
+    commands:
+      - "mkdir -p ~/.claude/plugins/marketplaces/superpowers-marketplace"
+      - "curl -fsSL https://raw.githubusercontent.com/obra/superpowers-marketplace/main/.claude-plugin/marketplace.json -o ~/.claude/plugins/marketplaces/superpowers-marketplace/marketplace.json"
+      - "mkdir -p ~/.claude/plugins/installed/superpowers"
+      - "git clone --depth 1 https://github.com/obra/superpowers.git ~/.claude/plugins/installed/superpowers"
+      - |
+        cat > ~/.claude/plugins/known_marketplaces.json << 'EOF'
+        {
+          "claude-plugins-official": {
+            "source": {"source": "github", "repo": "anthropics/claude-plugins-official"},
+            "installLocation": "/root/.claude/plugins/marketplaces/claude-plugins-official",
+            "lastUpdated": "2026-05-05T01:53:09.741Z"
+          },
+          "superpowers-marketplace": {
+            "source": {"source": "github", "repo": "obra/superpowers-marketplace"},
+            "installLocation": "/root/.claude/plugins/marketplaces/superpowers-marketplace",
+            "lastUpdated": "2026-05-05T02:26:00.000Z"
+          }
+        }
+        EOF
+      - |
+        cat > ~/.claude/plugins/installed_plugins.json << 'EOF'
+        {
+          "version": 2,
+          "plugins": {
+            "superpowers@superpowers-marketplace": {
+              "source": {"source": "url", "url": "https://github.com/obra/superpowers.git"},
+              "installLocation": "/root/.claude/plugins/installed/superpowers",
+              "cacheLocation": "/root/.claude/plugins/cache/superpowers-marketplace/superpowers/5.1.0",
+              "version": "5.1.0",
+              "installedAt": "2026-05-05T02:26:00.000Z",
+              "strict": true
+            }
+          }
+        }
+        EOF
+      - "mkdir -p ~/.claude/plugins/cache/superpowers-marketplace/superpowers/5.1.0"
+      - "cp -r ~/.claude/plugins/installed/superpowers/* ~/.claude/plugins/cache/superpowers-marketplace/superpowers/5.1.0/"
+    verify: "test -d ~/.claude/plugins/installed/superpowers && test -d ~/.claude/plugins/marketplaces/superpowers-marketplace"
+    needs_proxy: true
+    requires:
+      - install-base-tools
+    claude_hint: "marketplace.json 与 git clone 需代理；目录约定 ~/.claude/plugins/{marketplaces,installed}/"
+
+  - id: install-openspec
+    title: 安装 OpenSpec
+    group: 需要代理的软件安装
+    description: 安装 OpenSpec - AI 原生规格驱动开发系统。
+    commands:
+      - "npm install -g @fission-ai/openspec"
+    verify: "openspec --version"
+    needs_proxy: true
+    requires:
+      - install-base-tools
+      - install-claude-code
+    claude_hint: "npm 下载需代理；安装慢可换镜像 registry"
+
+  # --------------------------------------------------------------------------
+  # 6. 服务配置
+  # --------------------------------------------------------------------------
+  - id: config-sshd
+    title: 配置 SSH 服务器
+    group: 服务配置
+    description: 配置 SSH 服务器允许 root 登录、密码认证与公钥认证，注入授权公钥。
+    commands:
+      - "mkdir -p ~/.ssh"
+      - "chmod 700 ~/.ssh"
+      - "cat /root/server-init/fenixserver_key.pub >> ~/.ssh/authorized_keys"
+      - "chmod 600 ~/.ssh/authorized_keys"
+      - "sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config"
+      - "sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config"
+      - "sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config"
+      - "systemctl restart ssh"
+      - "systemctl enable ssh"
+    verify: "grep -qE '^PermitRootLogin yes' /etc/ssh/sshd_config && systemctl is-active ssh | grep -q active"
+    needs_proxy: false
+    requires:
+      - install-base-tools
+    files:
+      - fenixserver_key.pub
+    claude_hint: "sed 模式需匹配注释行原文；sshd_config 变体不同时手工插入 PermitRootLogin yes"

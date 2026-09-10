@@ -1,0 +1,28 @@
+{
+  "key": "",
+  "model": "claude-sonnet-5",
+  "theme": "default",
+  "notifications": true,
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run *)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "WebSearch(*)",
+      "WebFetch(*)"
+    ],
+    "deny": []
+  },
+  "env": {
+    "FETCH_TTY": ""
+  },
+  "hooks": {},
+  "includeCoAuthoredBy": true,
+  "cleanupPeriodDays": 90,
+  "preferredNotifChannel": "iterm2"
+}

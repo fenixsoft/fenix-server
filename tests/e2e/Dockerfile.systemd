@@ -1,0 +1,57 @@
+# tests/e2e/Dockerfile.systemd
+#
+# E2E 级测试容器——ubuntu:24.04 特权容器，systemd 为 PID1。
+# 容器内预装 openssh-server 并以 systemctl 启用 ssh，使
+# config-sshd / install-clash 等 systemctl 类任务可真实执行。
+#
+# 运行方式（docker compose -f tests/e2e/docker-compose.e2e.yml up --build -d）：
+#   - --privileged（systemd 需要）
+#   - tmpfs: /run /tmp
+#   - cgroup 挂载（/sys/fs/cgroup:cgroup）
+#   - 映射 SSH 端口（默认 2222:22）
+#   - SSH_PASSWORD 注入 root 密码（默认 e2epass123）
+#
+# 注意：容器内已启用 ssh，因此 config-sshd 任务会 "重启" ssh 服务
+# 而非首次安装（"restart"幂等，验证 systemctl 可管理服务）。
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# systemd + openssh-server，并启用 ssh 服务
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        systemd \
+        systemd-sysv \
+        openssh-server \
+        openssl \
+        ca-certificates \
+        iproute2 \
+        net-tools \
+        curl \
+        git \
+        sudo \
+    && rm -rf /var/lib/apt/lists/* \
+    && systemctl enable ssh
+
+# 允许 root 密码登录（容器内 sshd 配置，与 config-sshd 任务的目标一致）
+RUN sed -i 's/^#*PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && sed -i 's/^#*PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && sed -i 's/^#*PubkeyAuthentication .*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+
+# 预装测试辅助：sshfs 之外的工具由清单任务安装（不在此预装避免与清单断言冲突）
+RUN mkdir -p /run/sshd
+
+# 停用无用服务，保证 sys 资源给 sshd/init
+RUN systemctl mask systemd-firstboot.service 2>/dev/null || true
+
+# entrypoint：注入 root 密码（SSH_PASSWORD）后 exec systemd（PID1）
+COPY entrypoint-systemd.sh /entrypoint-systemd.sh
+RUN chmod +x /entrypoint-systemd.sh
+
+EXPOSE 22
+
+# systemd 作为 PID1
+STOPSIGNAL SIGRTMIN+3
+
+ENTRYPOINT ["/entrypoint-systemd.sh"]
