@@ -96,7 +96,8 @@ export type ClientMessage =
   | { type: 'pty-input'; payload: PtyInputPayload }
   | { type: 'tunnel-open'; payload?: TunnelOpenPayload }
   | { type: 'tunnel-test'; payload?: TunnelTestPayload }
-  | { type: 'disconnect'; payload?: DisconnectPayload };
+  | { type: 'disconnect'; payload?: DisconnectPayload }
+  | { type: 'snapshot'; payload?: never };
 
 // ---------------------------------------------------------------------------
 //  Server → Client
