@@ -17,6 +17,8 @@
  *   - 'task-state'      (taskId, status)
  *   - 'log'             ({ taskId, stream, data })  — real-time chunks
  *   - 'progress'        (completed, total)
+ *   - 'stopped-state'   (snapshot)  — queue/statuses captured the moment a
+ *                         stop interrupts the run (before the queue reset)
  *   - 'queue-finished'  ({ reason: 'completed' | 'stopped' })
  *
  * The runner does not depend on a transport layer: `executor` (command
@@ -135,6 +137,8 @@ export class TaskRunner extends EventEmitter {
   private stopRequested = false;
   private abortController: AbortController | null = null;
   private decisionWaiter: { resolve: (d: 'retry' | 'skip' | 'stop') => void } | null = null;
+  /** State captured at the moment a run is stopped (before queue reset). */
+  private _stopCapture: RunnerSnapshot | null = null;
 
   constructor(options: TaskRunnerOptions) {
     super();
@@ -197,6 +201,7 @@ export class TaskRunner extends EventEmitter {
     this.stopRequested = false;
     this.abortController = new AbortController();
     this.running = true;
+    this._stopCapture = null;
 
     this.emitProgress();
 
@@ -252,6 +257,14 @@ export class TaskRunner extends EventEmitter {
     };
   }
 
+  /**
+   * State captured when a run was stopped (queue and statuses as they were
+   * before the queue reset). Useful for reconnect resync and tests.
+   */
+  get stoppedState(): RunnerSnapshot | null {
+    return this._stopCapture;
+  }
+
   // -- Internals ------------------------------------------------------------
 
   private async drainQueue(): Promise<void> {
@@ -261,7 +274,10 @@ export class TaskRunner extends EventEmitter {
       this.awaitingDecision = null;
 
       const outcome = await this.executeTask(taskId);
-      if (this.stopRequested) break;
+      if (this.stopRequested) {
+        this.captureStopped();
+        break;
+      }
 
       if (outcome === 'success') {
         this.queue.shift();
@@ -274,7 +290,10 @@ export class TaskRunner extends EventEmitter {
       this.awaitingDecision = taskId;
       const decision = await this.waitForDecision();
       this.awaitingDecision = null;
-      if (this.stopRequested || decision === 'stop') break;
+      if (this.stopRequested || decision === 'stop') {
+        this.captureStopped();
+        break;
+      }
 
       if (decision === 'retry') {
         continue; // re-run the head of the queue (failed --start--> running)
@@ -391,6 +410,19 @@ export class TaskRunner extends EventEmitter {
     return new Promise((resolve) => {
       this.decisionWaiter = { resolve };
     });
+  }
+
+  private captureStopped(): void {
+    this._stopCapture = {
+      states: { ...this.states },
+      queue: [...this.queue],
+      currentTask: this.currentTask,
+      awaitingDecision: this.awaitingDecision,
+      running: true,
+      total: this.total,
+      completed: this.completed,
+    };
+    this.emit('stopped-state', this._stopCapture);
   }
 
   private applyTransition(taskId: string, event: TaskEvent): void {

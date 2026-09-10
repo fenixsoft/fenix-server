@@ -89,12 +89,13 @@ describe('loadManifest', () => {
     const result = await loadManifest(path);
 
     expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.kind).toBe('yaml-syntax');
+    if (result.ok || result.error.kind !== 'yaml-syntax') return;
     // 行信息存在（未闭合的 flow sequence 由解析器定位到文档末行）
-    expect(result.error.line).toBeTypeOf('number');
-    expect((result.error.line as number) >= 1).toBe(true);
-    expect(result.error.reason).toContain(`第 ${result.error.line} 行`);
+    const line = result.error.line;
+    expect(line).toBeTypeOf('number');
+    if (line === null) throw new Error('yaml 语法错误缺少行信息');
+    expect(line >= 1).toBe(true);
+    expect(result.error.reason).toContain(`第 ${line} 行`);
   });
 
   it('校验失败定位到任务 → 错误路径含任务 id 与缺失字段', async () => {
@@ -119,8 +120,7 @@ tasks:
     const result = await loadManifest(path);
 
     expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.kind).toBe('validation');
+    if (result.ok || result.error.kind !== 'validation') return;
     const errors = result.error.errors;
     expect(errors.length).toBeGreaterThan(0);
     const cmdErr = errors.find((e) => e.path.includes('install-claude-code'));
@@ -151,8 +151,7 @@ tasks:
     const result = await loadManifest(path);
 
     expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.kind).toBe('validation');
+    if (result.ok || result.error.kind !== 'validation') return;
     const dup = result.error.errors.find((e) => e.reason.includes('dup-id'));
     expect(dup).toBeDefined();
     expect(dup?.path).toContain('id');
