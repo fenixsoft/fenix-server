@@ -40,7 +40,14 @@ export interface PtyOpenOptions {
   rows?: number;
   /** $TERM 值（默认 xterm-256color）。 */
   term?: string;
-  /** 注入远程进程的环境变量（经 exec env 选项下发）。 */
+  /**
+   * 注入远程进程的环境变量（经 exec env 选项下发）。
+   *
+   * @deprecated 注意：OpenSSH 的 sshd 默认仅接受 AcceptEnv 白名单内的
+   * setenv 请求，任意环境变量会被忽略（实测 MOCK_* 不生效）。跨环境可用
+   * 的环境注入应构造 `env VAR=value ... <command>` 命令前缀（见 fixer.ts
+   * 的 shellQuote 复用，与 proxy-inject 一致）。
+   */
   env?: NodeJS.ProcessEnv;
   /** 输出分片回调。 */
   onData: PtyDataCallback;

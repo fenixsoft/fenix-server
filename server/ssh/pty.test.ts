@@ -16,6 +16,12 @@ import { SshConnection } from './connection.js';
 import { SshExecutor } from './executor.js';
 import { PtySession } from './pty.js';
 
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 const HOST = process.env.SSH_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.SSH_PORT ?? 2222);
 const USER = 'root';
@@ -35,7 +41,14 @@ describe('PtySession', () => {
 
     conn = new SshConnection({ host: HOST, port: PORT, username: USER, password: PASSWORD });
     await conn.connect();
-  }, 10_000);
+
+    // 在容器上部署 mock-claude.sh → /usr/local/bin/claude（幂等）
+    const mockPath = resolve(__dirname, 'fixtures/mock-claude.sh');
+    const mockContent = readFileSync(mockPath, 'utf8');
+    const executor = new SshExecutor(conn);
+    // 用 cat 写入二进制安全（文件较小），chmod 后即用。
+    await executor.exec(`cat > /usr/local/bin/claude << 'MOCKEOF'\n${mockContent}\nMOCKEOF\nchmod +x /usr/local/bin/claude`);
+  }, 15_000);
 
   afterAll(() => { conn?.close(); });
 
@@ -52,6 +65,26 @@ describe('PtySession', () => {
     const code = await exited;
     expect(code).toBe(0);
     expect(chunks.join('')).toContain('hello from pty');
+  });
+
+  it('通过 mock-claude 脚本：输出回调收到文本、退出回调报告退出码 0', async () => {
+    const pty = new PtySession(conn);
+    const chunks: string[] = [];
+    // 环境变量经 `env` 命令前缀注入（OpenSSH sshd 忽略 exec env 选项），
+    // 这也是修复流程实际使用的方式，与 proxy-inject 一致。
+    const exited = new Promise<number | null>((resolve) => {
+      void pty.open(
+        'env MOCK_CLAUDE_TEXT=mock-output-here MOCK_CLAUDE_EXIT_CODE=0 claude --dangerously-skip-permissions mock-spec-scenario',
+        {
+          onData: (d) => chunks.push(d),
+          onExit: resolve,
+        },
+      );
+    });
+
+    const code = await exited;
+    expect(code).toBe(0);
+    expect(chunks.join('')).toContain('mock-output-here');
   });
 
   it('非零退出码如实上报', async () => {
