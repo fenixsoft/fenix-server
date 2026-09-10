@@ -66,4 +66,4 @@
 
 - [x] 4.1 编写 `server/config.ts`：config.json 加载/保存（默认空配置、原子写入），配套 `config.test.ts`
 - [x] 4.2 编写 `server/ws.ts`：/ws WebSocket 端点、按 type 分发的消息路由器（未知类型回 error、非法 JSON 容错），配套 `ws.test.ts`
-- [ ] 4.3 编写 `server/index.ts`：服务入口（仅监听 127.0.0.1、静态托管占位兜底、SIGTERM 优雅退出、自动打开浏览器留接口）
+- [x] 4.3 编写 `server/index.ts`：服务入口（仅监听 127.0.0.1、静态托管占位兜底、SIGTERM 优雅退出、自动打开浏览器留接口）
