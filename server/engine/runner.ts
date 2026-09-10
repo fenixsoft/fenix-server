@@ -245,8 +245,17 @@ export class TaskRunner extends EventEmitter {
   /** Re-run the failed task currently awaiting a decision. No-op otherwise. */
   retry(taskId: string): void {
     if (this.awaitingDecision !== taskId) return;
-    // 修复进行中禁止手动重试（fixer 通过 retry 接管重跑语义）。
+    // 修复进行中禁止手动重试（重试语义由 fixer 经 retryAfterFix 接管）。
     if (this.states[taskId] === 'fixing') return;
+    this.decisionWaiter?.resolve('retry');
+  }
+
+  /**
+   * 修复会话结束后的自动重跑（fixer 调用）：绕过 fixing 期手动重试守卫，
+   * 直接以 'retry' 决策驱动队列重跑该任务。
+   */
+  retryAfterFix(taskId: string): void {
+    if (this.awaitingDecision !== taskId) return;
     this.decisionWaiter?.resolve('retry');
   }
 
