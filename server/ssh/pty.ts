@@ -8,7 +8,10 @@
  *   - 向会话写入输入（用户可在终端内与远端进程交互）
  *   - 终端尺寸同步（resize）
  *   - 进程退出检测（含退出码）
- *   - 主动终止（close channel），终止后连接可继续复用
+ *   - 主动终止（KILL + destroy），终止后连接可继续复用
+ *
+ * 生命周期：open()（exec 建立 → stream 挂载 → active=true）→ 运行中 →
+ *   close()/正常退出 → active=false → 连接可复用。
  *
  * 实现选型：使用 client.exec 的 `pty` 选项，而非 shell() 交互模式。
  * 理由：exec 直接以命令行字符串启动远端进程，输出干净（无 shell 提示符
@@ -57,13 +60,16 @@ export interface PtyOpenOptions {
  */
 export class PtySession {
   private stream: ClientChannel | null = null;
+  /** exec 请求已发出、stream 尚未挂载（open() 的 Promise 未决）。 */
+  private _opening = false;
+  /** 是否有已挂载的活跃会话。 */
   private _active = false;
   /** 是否因 close() 主动终止（供 onExit 区分「用户终止」与「正常退出」）。 */
   private _aborted = false;
 
   constructor(private readonly connection: SshConnection) {}
 
-  /** 是否有活跃的 PTY 会话。 */
+  /** 是否有活跃的 PTY 会话（stream 已挂载且未关闭）。 */
   get active(): boolean {
     return this._active;
   }
@@ -79,40 +85,60 @@ export class PtySession {
    * @param command 要执行的 shell 命令行字符串
    *                （如 `claude --dangerously-skip-permissions '<prompt>'`）
    * @param options 回调与 PTY 配置
-   * @throws 已有活跃会话时 / SSH 连接未就绪时
+   * @throws 已有活跃/建立中会话时、SSH 连接未就绪时
    */
   open(command: string, options: PtyOpenOptions): Promise<void> {
-    if (this._active) {
+    if (this._active || this._opening) {
       return Promise.reject(new Error('已有活跃的 PTY 会话，请先关闭'));
     }
     if (this.connection.state !== 'ready') {
       return Promise.reject(new Error('SSH 连接未就绪，无法启动 PTY 会话'));
     }
 
-    this._active = true;
+    this._opening = true;
     this._aborted = false;
 
     const client = this.connection.getClient();
     const { onData, onExit, onError } = options;
 
+    // 注意：ssh2 exec 在 env: undefined 时会阻塞回调触发（实测），
+    // 故仅在确实传入 env 时包含该字段。
+    const execOptions: { pty: { cols: number; rows: number; term: string }; env?: NodeJS.ProcessEnv } = {
+      pty: {
+        cols: options.cols ?? 80,
+        rows: options.rows ?? 24,
+        term: options.term ?? 'xterm-256color',
+      },
+    };
+    if (options.env !== undefined) {
+      execOptions.env = options.env;
+    }
+
     return new Promise<void>((resolve, reject) => {
       client.exec(
         command,
-        {
-          pty: {
-            cols: options.cols ?? 80,
-            rows: options.rows ?? 24,
-            term: options.term ?? 'xterm-256color',
-          },
-          env: options.env,
-        },
+        execOptions,
         (err, stream) => {
           if (err) {
-            this._active = false;
+            this._opening = false;
             reject(err);
             return;
           }
 
+          // open 建立期间被 close() 请求终止 → 立即拆除，不挂载。
+          if (this._aborted) {
+            this._opening = false;
+            try {
+              stream.destroy();
+            } catch {
+              /* 已销毁 */
+            }
+            reject(new Error('PTY 会话在建立期间被终止'));
+            return;
+          }
+
+          this._opening = false;
+          this._active = true;
           this.stream = stream;
 
           // PTY 模式下 stdout/stderr 合并到主通道输出，逐分片回调。
@@ -156,22 +182,35 @@ export class PtySession {
   }
 
   /**
-   * 主动终止 PTY 会话：关闭 channel 触发远端会话拆除，
+   * 主动终止 PTY 会话：发送 KILL 信号杀掉远端进程并强制拆除 channel，
    * 退出回调随后触发（code 为 null 或远端退出码），连接可继续复用。
-   * 无活跃会话时是安全的 no-op。
+   * 无活跃会话时是安全的 no-op；open() 建立期间调用则置终止标记，
+   * stream 挂载时立即拆除。
+   *
+   * 实现说明：channel-close 语义在部分 sshd/进程组合下不可靠——`close()`
+   * 既不保证触发客户端 'close' 事件，也不保证杀掉远端进程（如 sleep 无
+   * 端挂起，见 runner.integration.test.ts 风险记录）。故先经 SSH signal
+   * 请求发送 KILL 终止远端进程（进程可忽略 SIGHUP 但无法忽略 KILL），
+   * 再 destroy() 强制拆除 channel 使退出回调可靠触发。
    */
   close(): void {
+    if (this._opening) {
+      // stream 未挂载：标记终止，exec 回调里立即拆除。
+      this._aborted = true;
+      return;
+    }
     if (!this.stream) return;
     this._aborted = true;
     try {
-      this.stream.close();
+      // 终止远端进程（exec/shell channel 支持 signal 请求）
+      this.stream.signal('KILL');
     } catch {
-      // channel 已处于错误态 → 强制销毁兜底
-      try {
-        this.stream.destroy();
-      } catch {
-        /* 已销毁 */
-      }
+      // 进程可能已自行退出；继续强制拆除 channel 兜底
+    }
+    try {
+      this.stream.destroy();
+    } catch {
+      /* 已销毁 */
     }
   }
 }
