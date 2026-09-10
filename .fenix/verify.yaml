@@ -1,0 +1,23 @@
+# =============================================================================
+# .fenix/verify.yaml — 声明式验证契约（fenix-server 项目）
+#
+# 本项目交付形态：Node.js 本地服务（Fastify + ws）+ 静态托管的前端构建产物。
+# 验证前先全量构建（web vite 产物输出至 server/public，server 编译至 dist），
+# 再以 node dist/server/index.js 服务被测实例；服务仅监听 127.0.0.1，默认端口 3773。
+# 浏览器自动打开在实现中须由环境变量/无 TTY 检测禁用，验证环境无头运行。
+#
+# 完整字段文档见 core/verify_contract.py 模块注释。
+# =============================================================================
+
+prepare:
+  - run: npm run build
+  - run: npm --workspace web run build
+
+serve:
+  kind: command
+  cmd: FENIX_PORT={port} node dist/server/index.js
+
+ready:
+  url: /
+  expect: 200
+  timeout: 60
