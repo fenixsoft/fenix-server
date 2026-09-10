@@ -13,5 +13,7 @@ export default defineConfig({
     // Enable the globals so @testing-library/react can auto-register its
     // afterEach cleanup (DOM is cleaned between component tests).
     globals: true,
+    // Register jest-dom matchers (toBeInTheDocument / toHaveStyle / …).
+    setupFiles: ['./vitest.setup.ts'],
   },
 });
