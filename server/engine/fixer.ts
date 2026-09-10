@@ -20,7 +20,6 @@
 import { EventEmitter } from 'node:events';
 import { TaskRunner, type FailureContext } from './runner.js';
 import type { CommandExecutor } from './runner.js';
-import type { TunnelManager } from '../ssh/tunnel.js';
 import type { PtyOpenOptions } from '../ssh/pty.js';
 
 // ---------------------------------------------------------------------------
@@ -36,6 +35,13 @@ export interface PtySessionLike {
   close(): void;
 }
 
+/** 隧道接口（TunnelManager 结构性满足；测试注入 fake）。 */
+export interface FixerTunnel {
+  readonly state: 'closed' | 'opening' | 'open' | 'error';
+  readonly remotePort?: number;
+  open(): Promise<unknown>;
+}
+
 export interface FixerOptions {
   /** 任务执行器（含 fixing 状态机）。 */
   runner: TaskRunner;
@@ -44,7 +50,7 @@ export interface FixerOptions {
   /** PTY 会话工厂；缺省时需由调用方绑定连接创建真实 PtySession。 */
   ptyFactory: () => PtySessionLike;
   /** 隧道管理器（可选；提供时保证开启并注入代理环境变量）。 */
-  tunnel?: TunnelManager | null;
+  tunnel?: FixerTunnel | null;
   /** claude 可执行名（默认 'claude'）。 */
   claudeCommand?: string;
   /** 可用性检测命令（默认 'which claude && claude --version'）。 */
@@ -122,7 +128,7 @@ export class Fixer extends EventEmitter {
   private readonly runner: TaskRunner;
   private readonly executor: CommandExecutor;
   private readonly ptyFactory: () => PtySessionLike;
-  private readonly tunnel?: TunnelManager | null;
+  private readonly tunnel: FixerTunnel | null | undefined;
   private readonly claudeCommand: string;
   private readonly claudeCheckCommand: string;
   private readonly errorTailLimit: number;
@@ -323,7 +329,7 @@ export class Fixer extends EventEmitter {
     // runner 已不再停等（并发 stop/skip）时不重试，仅清理。
     const snap = this.runner.snapshot();
     if (snap.awaitingDecision === taskId) {
-      this.runner.retry(taskId);
+      this.runner.retryAfterFix(taskId);
     }
   }
 
