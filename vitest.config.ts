@@ -10,5 +10,8 @@ export default defineConfig({
   },
   test: {
     passWithNoTests: true,
+    // Enable the globals so @testing-library/react can auto-register its
+    // afterEach cleanup (DOM is cleaned between component tests).
+    globals: true,
   },
 });
