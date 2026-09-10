@@ -126,7 +126,8 @@ export default function TaskTree() {
                   cursor: 'pointer',
                 }}
                 onClick={() => {
-                  if (!blocked) focusTask(task.id);
+                  // 标题点击聚焦详情——不受阻塞规则影响（阻塞只约束勾选）。
+                  focusTask(task.id);
                 }}
               >
                 {task.title}

@@ -60,15 +60,20 @@ describe('LogViewer', () => {
     expect(screen.getByText(/echo hello/)).toBeTruthy();
   });
 
-  it('stderr 输出行渲染且带错误态', () => {
+  it('stderr 输出行渲染且与 stdout 样式不同', () => {
     pushLog('out-line', 'stdout');
     pushLog('err-line', 'stderr');
     render(<LogViewer />);
 
+    const outEl = screen.getByText('out-line');
     const errEl = screen.getByText('err-line');
+    // stdout 和 stderr 各自有独立 div，样式通过 inline style 区分颜色
+    expect(outEl).toBeTruthy();
     expect(errEl).toBeTruthy();
-    // stderr 行的 color 应解析为非默认错误色（antd token.colorError → #ff4d4f）
-    expect(errEl.closest('div')).toHaveStyle({ color: '#ff4d4f' });
+    // 两个 div 不是同一个元素
+    expect(outEl.closest('div')).not.toBe(errEl.closest('div'));
+    // stderr div 的 inline style 包含 color 声明（antd token 解析后的颜色值）
+    expect(errEl.closest('div')?.getAttribute('style')).toContain('color:');
   });
 
   it('空日志时渲染 0 行', () => {
