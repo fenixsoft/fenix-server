@@ -75,6 +75,7 @@ export class TunnelManager extends EventEmitter {
   private _opening?: Promise<TunnelStatus>;
   private readonly _channels = new Set<ClientChannel>();
   private _listening = false;
+  private _sshCloseBound = false;
 
   private readonly _onTcpConnection = (
     _details: TcpConnectionDetails,
@@ -116,7 +117,6 @@ export class TunnelManager extends EventEmitter {
     super();
     this.executor = new SshExecutor(connection);
     this._status = { state: 'closed', clientProxy: options.clientProxy };
-    this.connection.on('close', this._onSshClose);
   }
 
   // -- Public getters -------------------------------------------------------
@@ -313,12 +313,18 @@ export class TunnelManager extends EventEmitter {
     if (this._listening) return;
     this.connection.getClient().on('tcp connection', this._onTcpConnection);
     this._listening = true;
+    this.connection.on('close', this._onSshClose);
+    this._sshCloseBound = true;
   }
 
   private _unlistenTcpConnections(): void {
     if (!this._listening) return;
     this.connection.getClient().removeListener('tcp connection', this._onTcpConnection);
     this._listening = false;
+    if (this._sshCloseBound) {
+      this.connection.removeListener('close', this._onSshClose);
+      this._sshCloseBound = false;
+    }
   }
 
   /**

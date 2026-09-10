@@ -172,6 +172,46 @@ describe('TunnelManager', () => {
     expect(tunnel.state).toBe('error');
     expect(tunnel.getStatus().error).toContain('客户端代理不可达');
   });
+
+  it('状态变更事件序列：closed→opening→open→closed 每次变更均发射且携带端口', async () => {
+    const tunnel = new TunnelManager(conn, { clientProxy: `127.0.0.1:${proxy.port}` });
+    const events: TunnelStatus[] = [];
+    tunnel.on('status', (s) => events.push(s));
+
+    const status = await tunnel.open();
+    expect(status.state).toBe('open');
+    await tunnel.close();
+
+    const states = events.map((e) => e.state);
+    // 至少包含 opening 与 open，且 open 事件携带实际端口
+    expect(states).toContain('opening');
+    expect(states).toContain('open');
+    const openEvent = events.find((e) => e.state === 'open');
+    expect(openEvent?.remotePort).toBe(status.remotePort);
+    expect(events[events.length - 1]?.state).toBe('closed');
+  });
+
+  it('连通性测试：隧道开启且链路可用时返回出口 IP 文本', async () => {
+    const tunnel = new TunnelManager(conn, { clientProxy: `127.0.0.1:${proxy.port}` });
+    const status = await tunnel.open();
+    expect(status.state).toBe('open');
+
+    // 用宿主机目标服务器充当"出口"：testConnectivity 返回 curl 取回的响应体
+    const result = await tunnel.testConnectivity(`http://127.0.0.1:${target.port}/whoami`);
+    expect(result.ok).toBe(true);
+    expect(result.ip).toContain('PROXY-TARGET-OK');
+
+    await tunnel.close();
+  });
+
+  it('连通性测试：隧道未开启时快速返回失败原因而非挂起', async () => {
+    const tunnel = new TunnelManager(conn, { clientProxy: `127.0.0.1:${proxy.port}` });
+    const started = Date.now();
+    const result = await tunnel.testConnectivity();
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('隧道未开启');
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
 });
 
 // ---------------------------------------------------------------------------
