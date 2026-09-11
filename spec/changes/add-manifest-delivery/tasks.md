@@ -42,3 +42,13 @@
 
 - [x] 4.1 server 全量测试（handlers 单测含 manifest 序列）+ web 全量测试（appStore 覆盖分支）+ `npm run build` 通过
 - [x] 4.2 浏览器冒烟：真实服务 connect 后任务树显示 17 任务、置灰正确、错误提示可见；勾选无依赖任务执行成功
+
+## 验证修复（原地打回第 1 轮）
+
+### 上轮实现结论（自动携带，来自上一轮 implementer 收工结论）
+
+交付 manifest 下发协议与前端执行链路修复：1) shared/messages.ts 新增 ManifestPayload + manifest ServerMessage，isServerMessage 结构化守卫自动识别；2) handlers.ts sendManifestSnapshot/sendFullSnapshot 严格先 manifest 后 task-state（design 决策 2 顺序保证）；3) appStore applyServerMessage case manifest 整体覆盖 BUILTIN_MANIFEST、重建 taskStates 为全 pending、清空勾选/进度/日志（不重置 sshStatus）；4) TaskView 顶部 lastError Alert 全局可见化（纯展示，生命周期由 connect/exec/stop 成功动作清除）；5) exec-flow e2e 覆盖：manifest 一致性（17 任务 = assets/tasks.yaml）+ echo-ok 成功链路 + echo-dep 依赖闭包串行 + fail-always 重试/跳过决策态。全量回归 24 文件 231 测试通过，server tsc + web tsc + vite build 零错误，浏览器冒烟验证：connect → manifest(17 任务) → task-state 全 pending → 任务树渲染正确（无依赖可选、有依赖置灰）。
+
+- [ ] 先复核失败有效性：逐条核对 `spec/changes/add-manifest-delivery/verification-report.md` 中失败场景的期望断言（状态字面量/选择器/前置数据）与产品实际行为是否相符——断言与产品不符属场景缺陷，修场景文件；确属产品行为不符才修产品代码
+- [ ] 按复核结论修复：场景缺陷改场景文件，真实产品 Bug 改产品代码
+- [ ] 修复后重跑验证确认通过
