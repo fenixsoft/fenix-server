@@ -6,9 +6,10 @@
  *
  * Client → Server messages: connect, exec, stop, retry, skip,
  *   fixWithClaude, pty-input, tunnel-open, tunnel-test, disconnect
- * Server → Client messages: connection-status, task-state, log,
+ * Server → Client messages: manifest, connection-status, task-state, log,
  *   claude-output, tunnel-status, progress, error
  */
+import type { TaskManifest } from './schema.js';
 
 // ---------------------------------------------------------------------------
 //  Shared payload helpers
@@ -147,9 +148,15 @@ export interface ErrorPayload {
   message: string;
 }
 
+export interface ManifestPayload {
+  /** 本次会话实际解析出的任务清单（内置或 connect 携带的自定义 YAML）。 */
+  manifest: TaskManifest;
+}
+
 // --- Discriminated union ---------------------------------------------------
 
 export type ServerMessage =
+  | { type: 'manifest'; payload: ManifestPayload }
   | { type: 'connection-status'; payload: ConnectionStatusPayload }
   | { type: 'task-state'; payload: TaskStatePayload }
   | { type: 'log'; payload: LogPayload }

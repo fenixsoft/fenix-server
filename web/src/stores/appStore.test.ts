@@ -8,7 +8,11 @@
  */
 // @vitest-environment jsdom
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { parse } from 'yaml';
 import { useAppStore, LOG_RING_LIMIT } from './appStore';
+import { parseTaskManifest, type TaskManifest } from '@fenix/shared/schema';
 import type { ServerMessage } from '@fenix/shared/messages';
 
 // ---------------------------------------------------------------------------
@@ -304,6 +308,87 @@ describe('message reduction', () => {
   it('error 消息写入 lastError', () => {
     send({ type: 'error', payload: { code: 'UNREACHABLE', message: '无法连接服务器' } });
     expect(useAppStore.getState().lastError).toContain('无法连接服务器');
+  });
+});
+
+describe('manifest 覆盖（server → client）', () => {
+  /** 从真实 assets/tasks.yaml 解析服务端清单（17 任务）。 */
+  function serverManifest17(): TaskManifest {
+    const yamlText = readFileSync(join(process.cwd(), 'assets/tasks.yaml'), 'utf8');
+    const result = parseTaskManifest(parse(yamlText));
+    if (!result.ok) throw new Error('assets/tasks.yaml 校验失败');
+    return result.manifest;
+  }
+
+  /** 触发 connect 前的连接态视图（模拟已选/已跑状态）。 */
+  function seedConnectedState(): void {
+    const store = useAppStore.getState();
+    store.loadBuiltinManifest(); // 内置 10 任务代表性子集
+    useAppStore.setState({
+      sshStatus: 'ready',
+      selected: ['setup-proxy'],
+      taskStates: { 'setup-proxy': 'success' },
+      progress: { completed: 1, total: 10 },
+      currentTaskId: 'setup-proxy',
+      currentTaskTitle: '安装 Clash 代理服务',
+      awaitingDecision: null,
+      focusedTaskId: 'setup-proxy',
+      runStartedAt: Date.now(),
+    });
+    // 造两条日志 + claude 输出，验证 manifest 覆盖时清空/保留语义。
+    send({ type: 'task-state', payload: { taskId: 'setup-proxy', status: 'running' } });
+    send({ type: 'log', payload: { taskId: 'setup-proxy', stream: 'stdout', data: 'done' } });
+    send({ type: 'claude-output', payload: { data: 'fixing...' } });
+  }
+
+  it('收到 manifest → 用服务端清单覆盖本地、重建 taskStates/勾选/进度/日志、保持连接态', () => {
+    seedConnectedState();
+    const serverManifest = serverManifest17();
+
+    send({ type: 'manifest', payload: { manifest: serverManifest } });
+
+    const s = useAppStore.getState();
+    // 清单被服务端 17 任务整体替换（不再退回内置 10 任务子集）
+    expect(s.manifest).toBe(serverManifest);
+    expect(s.manifest!.tasks.length).toBe(17);
+    // 全部状态重建为 pending
+    expect(Object.keys(s.taskStates)).toHaveLength(17);
+    expect(Object.values(s.taskStates).every((v) => v === 'pending')).toBe(true);
+    // 勾选/进度/当前任务/详情聚焦/日志全部清空
+    expect(s.selected).toEqual([]);
+    expect(s.progress).toEqual({ completed: 0, total: 0 });
+    expect(s.currentTaskId).toBeNull();
+    expect(s.currentTaskTitle).toBeNull();
+    expect(s.focusedTaskId).toBeNull();
+    expect(s.logLines.every((l) => l.kind !== 'header' && l.kind !== 'output')).toBe(true);
+    expect(s.logLines).toHaveLength(0);
+    // 连接态保持（清单仅重建视图，不重置 ssh 连接）
+    expect(s.sshStatus).toBe('ready');
+    // claudeOutput 属修复终端缓冲，snapshot 补发时不主动清空
+    expect(s.claudeOutput).toContain('fixing...');
+  });
+
+  it('manifest 覆盖后置灰与可选任务集按服务端 requires 推导', () => {
+    seedConnectedState();
+    const serverManifest = serverManifest17();
+    send({ type: 'manifest', payload: { manifest: serverManifest } });
+
+    // 全部 pending 时，仅无依赖任务可选（selectAll 尊重级联与阻塞规则）。
+    useAppStore.getState().selectAll();
+    const selected = useAppStore.getState().selected;
+    const rootTasks = serverManifest.tasks.filter((t) => (t.requires ?? []).length === 0).map((t) => t.id);
+    expect(selected.sort()).toEqual([...rootTasks].sort());
+    // 有依赖任务（非无依赖集合内）均处于置灰态不可选。
+    for (const t of serverManifest.tasks) {
+      if (!rootTasks.includes(t.id)) expect(selected).not.toContain(t.id);
+    }
+  });
+
+  it('manifest 覆盖不改变 manifestSource（用户选择的内置/自定义标识）', () => {
+    seedConnectedState();
+    useAppStore.setState({ manifestSource: 'custom' as const });
+    send({ type: 'manifest', payload: { manifest: serverManifest17() } });
+    expect(useAppStore.getState().manifestSource).toBe('custom');
   });
 });
 

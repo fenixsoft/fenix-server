@@ -9,7 +9,7 @@
  * │  Tree  │                                                │
  * └────────┴────────────────────────────────────────────────┘
  */
-import { Tabs } from 'antd';
+import { Alert, Tabs } from 'antd';
 import ExecutionToolbar from '../components/ExecutionToolbar';
 import TaskTree from '../components/TaskTree';
 import LogViewer from '../components/LogViewer';
@@ -21,6 +21,7 @@ export default function TaskView() {
   const manifest = useAppStore((s) => s.manifest);
   const taskStates = useAppStore((s) => s.taskStates);
   const focusedTaskId = useAppStore((s) => s.focusedTaskId);
+  const lastError = useAppStore((s) => s.lastError);
 
   const focusedTask = focusedTaskId
     ? manifest?.tasks.find((t) => t.id === focusedTaskId) ?? null
@@ -28,7 +29,19 @@ export default function TaskView() {
   const focusedStatus = focusedTaskId ? (taskStates[focusedTaskId] ?? 'pending') : 'pending';
 
   return (
-    <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+      {/* 执行区全局错误出口：服务端 error 消息（未知任务 id / BLOCKED_TASK /
+          NO_SESSION 等）在此可见，用户据此定位「执行选中无反应」类静默失败。
+          生命周期由 store 契约保证：下次成功动作（connect/exec/stop 等）发起时清除。 */}
+      {lastError && (
+        <Alert
+          type="error"
+          message={lastError}
+          showIcon
+          style={{ margin: 8, marginBottom: 0 }}
+        />
+      )}
+
       {/* Left: toolbar + tree */}
       <div
         style={{

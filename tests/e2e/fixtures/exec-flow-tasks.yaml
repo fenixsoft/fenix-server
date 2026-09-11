@@ -1,0 +1,35 @@
+# tests/e2e/fixtures/exec-flow-tasks.yaml
+#
+# exec-flow e2e 测试专用清单（add-manifest-delivery SPEC）。
+# 不用内置 17 任务清单测失败（避免依赖真实网络/软件源副作用）：
+#  - echo-ok     无依赖成功任务：echo hello-from-exec，verify（true）通过
+#  - echo-dep    依赖 echo-ok 的任务：覆盖「多个依赖闭合任务执行」场景
+#                （依赖先行、全部 success、进度 completed==total）
+#  - fail-always 故意失败任务：exit 1 → 触发 runner 停等决策态（重试/跳过）
+meta:
+  name: exec-flow-fixture
+  version: "1.0"
+tasks:
+  - id: echo-ok
+    title: Echo OK
+    group: fixture
+    description: 无依赖成功任务，stdout 输出 hello-from-exec。
+    commands:
+      - "echo hello-from-exec"
+    verify: "true"
+    requires: []
+  - id: echo-dep
+    title: Echo Dep
+    group: fixture
+    description: 依赖 echo-ok 的任务，验证依赖闭包串行执行。
+    commands:
+      - "echo hello-from-dep"
+    verify: "true"
+    requires: [echo-ok]
+  - id: fail-always
+    title: Fail Always
+    group: fixture
+    description: 故意失败任务（exit 1），用于决策态（重试/跳过）覆盖。
+    commands:
+      - "echo about-to-fail && exit 1"
+    requires: []

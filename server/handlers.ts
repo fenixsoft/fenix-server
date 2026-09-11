@@ -453,17 +453,22 @@ export class SessionContext {
 
   // -- 快照 -----------------------------------------------------------------
 
-  /** connect 成功后回发任务快照：全量 pending 状态 + progress 0/N。 */
+  /**
+   * connect 成功后回发任务清单与快照：先 manifest 后全量 pending 状态 + progress 0/N。
+   * 下发顺序保证（design 决策 2）：前端先有清单定义（taskId→requires 闭合）
+   * 再消费状态流，避免「先有状态无定义」竞态。
+   */
   sendManifestSnapshot(): void {
     const manifest = this.manifest;
     if (manifest === null) return;
+    this.broadcast({ type: 'manifest', payload: { manifest } });
     for (const task of manifest.tasks) {
       this.broadcast({ type: 'task-state', payload: { taskId: task.id, status: 'pending' } });
     }
     this.broadcast({ type: 'progress', payload: { completed: 0, total: manifest.tasks.length } });
   }
 
-  /** snapshot 消息的全量状态：任务状态 + 进度 + 隧道状态。 */
+  /** snapshot 消息的全量状态：先 manifest 补发 → 任务状态 + 进度 + 隧道状态。 */
   sendFullSnapshot(): void {
     const manifest = this.manifest;
     const runner = this.runner;
@@ -474,6 +479,9 @@ export class SessionContext {
       this.broadcast({ type: 'tunnel-status', payload: { open: false } });
       return;
     }
+
+    // 重连补发同样先 manifest：前端用当前会话清单重建视图，再消费状态流。
+    this.broadcast({ type: 'manifest', payload: { manifest } });
 
     const states = runner.snapshotStates;
     for (const task of manifest.tasks) {
