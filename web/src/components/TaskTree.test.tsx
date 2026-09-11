@@ -109,6 +109,40 @@ describe('TaskTree', () => {
     await user.click(bCheckbox);
     expect(useAppStore.getState().selected).toContain('B');
   });
+
+  it('清单覆盖新增分组时新面板自动展开且行渲染（BUG-01 回归）', async () => {
+    // 首次挂载：旧清单（分组 组一/组二，无「Claude Code」）。
+    renderWithStore();
+    expect(screen.queryByTestId('task-row-D')).toBeNull();
+
+    // 服务端 manifest 覆盖：新增「Claude Code」分组（挂载时不存在 → 此前
+    // defaultActiveKey 已固化导致该面板未激活、children 不渲染、行缺失）。
+    useAppStore.setState({
+      manifest: {
+        meta: { name: 't2', version: 1 },
+        tasks: [
+          { id: 'B', title: '任务B', group: '组一', commands: ['echo b'] },
+          { id: 'D', title: '任务D', group: 'Claude Code', commands: ['echo d'] },
+          { id: 'E', title: '任务E', group: 'Claude Code', commands: ['echo e'] },
+        ],
+      },
+      taskStates: { B: 'pending', D: 'pending', E: 'pending' },
+    });
+
+    // 新分组自动并入展开集 → 其任务行进入 DOM，且全量行数正确。
+    expect(await screen.findByTestId('task-row-D')).toBeTruthy();
+    expect(within(row('E')).getByText('任务E')).toBeTruthy();
+    expect(screen.getAllByTestId(/^task-row-/)).toHaveLength(3);
+  });
+
+  it('折叠面板 children 仍挂载（forceRender）：折叠后行不消失', async () => {
+    renderWithStore();
+
+    // 折叠「组二」后，其任务行 C 仍在 DOM（children 保持挂载）。
+    const header = screen.getByText('组二').closest('.ant-collapse-header') as HTMLElement;
+    await userEvent.setup().click(header);
+    expect(row('C')).toBeTruthy();
+  });
 });
 
 describe('FailedTaskActions 三动作', () => {

@@ -9,9 +9,11 @@
  *
  * The component is purely presentational + store-aware: it reads tasks,
  * states, selected, and blocked from the Zustand store and calls
- * `toggleTask` when the user interacts.
+ * `toggleTask` when the user interacts. The only local state is the
+ * Collapse expanded-set, which re-syncs when the manifest is overridden
+ * (see `activeKeys` below).
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Checkbox, Collapse, Typography, Tooltip, theme } from 'antd';
 import { useAppStore } from '../stores/appStore';
 import FailedTaskActions from './FailedTaskActions';
@@ -72,6 +74,26 @@ export default function TaskTree() {
     if (!manifest) return [];
     return [...groupTasks(manifest.tasks).entries()];
   }, [manifest]);
+  const groupKeys = useMemo(() => grouped.map(([group]) => group), [grouped]);
+
+  // Collapse 展开态用受控 activeKey 维护，而非 defaultActiveKey：后者只在首次
+  // 挂载时读取一次，而连接成功后服务端 manifest 会整体覆盖本地清单并可能引入
+  // 挂载时尚不存在的新分组（如服务端「Claude Code」分组，内置清单对应分组名为
+  // 「Claude Code 安装」）。若仅依赖 default，新分组面板保持未激活且 Collapse
+  // 缺省不渲染折叠面板 children，该分组下的任务行会整体丢失（曾复现任务树
+  // 16/17 行缺 install-claude-code）。这里在清单替换时把新分组并入展开集；
+  // 配合 items 的 forceRender，即使面板被折叠其 children 也保持挂载。
+  const groupFingerprint = JSON.stringify(groupKeys);
+  const [activeKeys, setActiveKeys] = useState<string[]>(groupKeys);
+
+  useEffect(() => {
+    setActiveKeys((prev) => {
+      const merged = [...new Set([...prev, ...groupKeys])];
+      return merged.length === prev.length ? prev : merged;
+    });
+    // 仅当分组集合真正变化（JSON 指纹）时合并新分组；用户手动折叠的分组保留。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupFingerprint]);
 
   if (!manifest || manifest.tasks.length === 0) {
     return <Text type="secondary">暂无任务清单。请在连接视图中选择清单。</Text>;
@@ -79,12 +101,15 @@ export default function TaskTree() {
 
   return (
     <Collapse
-      defaultActiveKey={grouped.map(([group]) => group)}
+      activeKey={activeKeys}
+      onChange={(keys) => setActiveKeys(keys)}
       size="small"
       ghost
       style={{ background: 'transparent' }}
       items={grouped.map(([group, tasks]) => ({
         key: group,
+        // 折叠面板 children 仍挂载：清单覆盖/置灰判定按全量任务行核对不丢行。
+        forceRender: true,
         label: (
           <Text strong style={{ fontSize: 13 }}>
             {group}

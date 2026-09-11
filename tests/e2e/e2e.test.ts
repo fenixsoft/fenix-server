@@ -261,8 +261,21 @@ beforeAll(async () => {
 afterAll(async () => {
   conn?.close();
   if (mockProxy) {
+    // 先注册 exit 监听再发信号：若进程已在运行中退出，后置的 once('exit')
+    // 不会重放事件，Promise 将永久挂起（曾导致 afterAll 钩子 10s 超时，
+    // 残留 mock-proxy 进程占端口）。另加 5s 兜底：优雅退出未落地则 SIGKILL
+    // 强杀并同步 resolve，保证清理钩子有界返回、不挂死。
+    let resolveExit: () => void = () => {};
+    const exited = new Promise<void>((resolve) => {
+      resolveExit = resolve;
+    });
+    mockProxy!.once('exit', resolveExit);
     mockProxy.kill('SIGTERM');
-    await new Promise<void>((resolve) => mockProxy!.once('exit', resolve)).catch(() => {});
+    const guard = setTimeout(() => {
+      mockProxy!.kill('SIGKILL');
+      resolveExit();
+    }, 5000);
+    await exited.finally(() => clearTimeout(guard)).catch(() => {});
   }
   if (localDir) await rm(localDir, { recursive: true, force: true }).catch(() => {});
   // 只清理本测试启动的容器（外部手工启动的保留）
