@@ -578,6 +578,25 @@ export const useAppStore = create<AppStore>()((set, get) => {
     applyServerMessage(msg) {
       const state = get();
       switch (msg.type) {
+        case 'manifest': {
+          // 服务端清单为准：整体覆盖本地清单，按新任务集重建视图状态。
+          // 不重置 sshStatus（连接已建立，仅清单视图重建）；claudeOutput 属
+          // 修复会话终端输出，snapshot 补发时不清（避免中断进行中的修复）。
+          const { manifest } = msg.payload;
+          set({
+            manifest,
+            taskStates: initialStates(manifest),
+            selected: [],
+            progress: { completed: 0, total: 0 },
+            currentTaskId: null,
+            currentTaskTitle: null,
+            awaitingDecision: null,
+            focusedTaskId: null,
+            logLines: [],
+            runStartedAt: null,
+          });
+          break;
+        }
         case 'connection-status': {
           const p = msg.payload;
           set((s) => ({

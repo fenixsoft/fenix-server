@@ -409,6 +409,28 @@ describe('connect', () => {
     expect(h.ctx.hasActiveSession()).toBe(true);
   });
 
+  it('connect 成功 → 消息序列为 connection-status(connecting/ready) → manifest → task-state×N → progress', async () => {
+    const h = makeHarness();
+    await dispatch(h, connectMsg());
+
+    const kinds = h.channel.sent.map((m) => m.type);
+    // 头部：connecting + ready 两次连接状态；随后 manifest 先于全部 task-state。
+    expect(kinds.slice(0, 2)).toEqual(['connection-status', 'connection-status']);
+    const manifestIdx = kinds.indexOf('manifest');
+    const firstStateIdx = kinds.findIndex((k) => k === 'task-state');
+    const progressIdx = kinds.lastIndexOf('progress');
+    expect(manifestIdx).toBe(2);
+    expect(manifestIdx).toBeLessThan(firstStateIdx);
+    expect(firstStateIdx).toBeLessThan(progressIdx);
+    // manifest 携带当前会话清单（内置临时文件 alpha/beta）。
+    const manifestMsg = h.channel.sent[manifestIdx] as { payload: { manifest: { tasks: Array<{ id: string }> } } };
+    expect(manifestMsg.payload.manifest.tasks.map((t) => t.id)).toEqual(['alpha', 'beta']);
+    // task-state 数量与清单任务数一致，且全部在 progress 之前到达。
+    const stateCount = kinds.filter((k) => k === 'task-state').length;
+    expect(stateCount).toBe(2);
+    expect(kinds.slice(firstStateIdx, progressIdx).filter((k) => k === 'progress').length).toBe(0);
+  });
+
   it('认证失败 → connection-status (error) 含 AUTH_FAILED', async () => {
     const h = makeHarness({ connectBehavior: 'auth-failed' });
     await dispatch(h, connectMsg());
@@ -832,7 +854,7 @@ describe('snapshot', () => {
     expect(h.channel.errors().length).toBe(0);
   });
 
-  it('有会话 → 全量 task-state + progress + tunnel-status', async () => {
+  it('有会话 → 全量 task-state + progress + tunnel-status，且 manifest 先于状态补发', async () => {
     const h = makeHarness();
     await dispatch(h, connectMsg());
     h.runner.setState('alpha', 'success');
@@ -841,6 +863,12 @@ describe('snapshot', () => {
     h.channel.sent = [];
 
     await dispatch(h, JSON.stringify({ type: 'snapshot' }));
+
+    // 重连补发：manifest 先于全部 task-state（design 决策 2）。
+    expect(h.channel.sent[0]?.type).toBe('manifest');
+    const manifestMsg = h.channel.sent[0] as { payload: { manifest: { tasks: Array<{ id: string }> } } };
+    expect(manifestMsg.payload.manifest.tasks.map((t) => t.id)).toEqual(['alpha', 'beta']);
+
     const states = h.channel.ofType('task-state') as Array<{ payload: { taskId: string; status: string } }>;
     expect(states.map((s) => s.payload)).toEqual([
       { taskId: 'alpha', status: 'success' },
