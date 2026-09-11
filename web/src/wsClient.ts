@@ -54,11 +54,22 @@ export interface WebSocketLike {
 //  WsClient
 // ---------------------------------------------------------------------------
 
+/** Cap on buffered frames; handshake queues are tiny, this is a safety net. */
+const MAX_PENDING = 100;
+
 export class WsClient {
   private socket: WebSocketLike | null = null;
   private manualClose = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Frames sent while the socket is not yet OPEN (e.g. the initial `connect`
+   * issued right after `connect()`), flushed in order on open. Without this
+   * buffer those messages are silently lost — `this.socket` is only assigned
+   * in onopen, so a guard on it would drop the very first handshake message.
+   */
+  private pending: string[] = [];
 
   private status: WsStatus = 'closed';
   private messageListeners = new Set<MessageListener>();
@@ -102,6 +113,7 @@ export class WsClient {
     if (this.status === 'ready' || this.status === 'connecting') return;
     this.manualClose = false;
     this.reconnectAttempts = 0;
+    this.pending = [];          // clear any leftover frames from a prior attempt
     this.openSocket(url);
   }
 
@@ -115,6 +127,7 @@ export class WsClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.pending = [];          // handshake frames are moot once disconnected
     this.socket?.close();
     this.socket = null;
     this.setStatus('closed');
@@ -123,14 +136,25 @@ export class WsClient {
   // -- Send -----------------------------------------------------------------
 
   /**
-   * Send a typed client message. Silently drops when the socket is not open —
-   * the UI is gated on connection status, so this is an invariant, not an
-   * error path.
+   * Send a typed client message. When the socket is already OPEN the frame
+   * goes out immediately. While a connection is being established (the
+   * handshake right after `connect()` / a reconnect), frames are buffered and
+   * flushed in order on open — without this the first message (e.g. `connect`)
+   * would race the socket and be lost. Outside a connecting state (closed or
+   * error) sends are dropped: the UI is gated on connection status, so this
+   * is an invariant, not an error path.
    */
   send(msg: ClientMessage): void {
+    const data = JSON.stringify(msg);
     const socket = this.socket;
-    if (!socket || socket.readyState !== OPEN) return;
-    socket.send(JSON.stringify(msg));
+    if (socket && socket.readyState === OPEN) {
+      socket.send(data);
+      return;
+    }
+    if (this.status === 'connecting') {
+      this.pending.push(data);
+      if (this.pending.length > MAX_PENDING) this.pending.shift();
+    }
   }
 
   // -- Internals ------------------------------------------------------------
@@ -142,6 +166,10 @@ export class WsClient {
     socket.onopen = () => {
       this.socket = socket;
       this.reconnectAttempts = 0;
+      // Flush any messages buffered during the connecting handshake (e.g. the
+      // initial `connect`), in order, before the reconnect resync snapshot.
+      for (const frame of this.pending) socket.send(frame);
+      this.pending = [];
       this.setStatus('ready');
       // Reconnect resync: request a full state snapshot from the server.
       this.send({ type: 'snapshot' });
