@@ -18,7 +18,9 @@ import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { SshConnection } from './ssh/connection.js';
+import { AppConfigManager } from './config.js';
 import { MessageRouter, registerWsPlugin } from './ws.js';
+import { registerSessionHandlers } from './handlers.js';
 
 export const DEFAULT_PORT = 3773;
 export const ALLOWED_HOST = '127.0.0.1';
@@ -81,8 +83,14 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   // Health path — used by the verification contract.
   fastify.get('/health', async () => ({ ok: true }));
 
-  // WebSocket channel.
+  // WebSocket channel: 装配真实 handler 集（connect/exec/stop/retry/skip/
+  // fixWithClaude/pty-input/tunnel-open/tunnel-test/disconnect/snapshot）。
+  // 单会话语义：SessionContext 随 buildServer 创建，所有 /ws 连接共享。
   const router = options.router ?? new MessageRouter();
+  registerSessionHandlers(router, {
+    config: new AppConfigManager({ configDir: process.cwd() }),
+    builtinManifestPath: resolve(process.cwd(), 'assets/tasks.yaml'),
+  });
   registerWsPlugin(fastify, { router, path: '/ws' });
 
   // Graceful shutdown: track active SSH connections.
