@@ -1,13 +1,5 @@
 {
   "status": "success",
-  "spec": "add-web-ui",
-  "summary": "修复验证打回的两个产品缺陷：1) wsClient.send() 在握手期（status=connecting）入 pending 队列，onopen 按序冲刷再发 snapshot，解决 connect 帧在 OPEN 前被静默丢弃（BUG-01 根因）；2) ConnectionView 密码始终随 connect 发送（仅控制是否持久化到 localStorage），与 spec「填写正确凭据提交连接」语义对齐（BUG-02 根因）。新增 wsClient.test.ts 6 个回归测试覆盖缓冲冲刷全路径。全量测试通过（223 server + 44 web），tsc 零错误，build 成功。浏览器端到端冒烟验证通过：连接 127.0.0.1:2222 root/testpass123 → 任务视图（root@127.0.0.1:2222 ●已连接）→ 全选执行 → 进度 0/2 运行中。19 个 env 场景失败为 BUG-01/02 连锁反应（断言与产品设计相符，修复后重验将通过）；1 个 test-defect（server-delete-removes-from-list）选择器命中 antd 隐藏测量容器，裁决已豁免。",
-  "findings": [
-    {
-      "type": "scenario-step-deficiency",
-      "element": "connect-success-enters-task-view / 19 个连接后场景步骤",
-      "current": "场景步骤缺少 SSH 端口设置（默认 22 vs 验证容器 2222）和密码填写，导致 connect 帧无正确凭据 AUTH_FAILED；验证框架 planner 生成 test_scenarios.json 时无 SSH 凭据上下文，属验证框架场景设计层",
-      "suggestion": "请验证 Agent/planner 补充场景端口（2222）和密码（验证容器 SSH_PASSWORD）步骤，或在验证环境提供 SSH 凭据注入机制，使连接成功类场景可复现真实用户流程"
-    }
-  ]
+  "spec": "add-manifest-delivery",
+  "summary": "交付 manifest 下发协议与前端执行链路修复：1) shared/messages.ts 新增 ManifestPayload + manifest ServerMessage，isServerMessage 结构化守卫自动识别；2) handlers.ts sendManifestSnapshot/sendFullSnapshot 严格先 manifest 后 task-state（design 决策 2 顺序保证）；3) appStore applyServerMessage case manifest 整体覆盖 BUILTIN_MANIFEST、重建 taskStates 为全 pending、清空勾选/进度/日志（不重置 sshStatus）；4) TaskView 顶部 lastError Alert 全局可见化（纯展示，生命周期由 connect/exec/stop 成功动作清除）；5) exec-flow e2e 覆盖：manifest 一致性（17 任务 = assets/tasks.yaml）+ echo-ok 成功链路 + echo-dep 依赖闭包串行 + fail-always 重试/跳过决策态。全量回归 24 文件 231 测试通过，server tsc + web tsc + vite build 零错误，浏览器冒烟验证：connect → manifest(17 任务) → task-state 全 pending → 任务树渲染正确（无依赖可选、有依赖置灰）。"
 }
