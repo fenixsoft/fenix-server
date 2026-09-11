@@ -100,16 +100,22 @@ export default function ConnectionView() {
       loadBuiltinManifest();
     }
 
+    // 密码始终用于本次连接（「记住密码」只决定是否持久化到本地存储）。
     const server: PersistedServer = {
       name: values.name,
       host: values.host,
       port: values.port,
       username: values.username,
       rememberPassword: values.rememberPassword,
+      password: values.password,
+    };
+    // 持久化副本：仅勾选「记住密码」时才保存密码（与明文存储风险提示一致）。
+    const persisted: PersistedServer = {
+      ...server,
       password: values.rememberPassword ? values.password : undefined,
     };
     // Remember the server in the local list (password only when opted-in).
-    addServer(server);
+    addServer(persisted);
     setFormError(null);
     connect(server, { clientProxy, manifestSource });
   }

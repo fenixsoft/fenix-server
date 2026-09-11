@@ -1,1 +1,13 @@
-{"spec":"add-ws-handlers","status":"success","summary":"完成 add-ws-handlers 全部 17 个任务：server/handlers.ts 新建 SessionContext 与 11 种 ClientMessage 完整接线（connect/exec/stop/retry/skip/fixWithClaude/pty-input/tunnel-open/tunnel-test/disconnect/snapshot）到既有引擎（SshConnection/TaskRunner/ClaudeFixer/TunnelManager），server/index.ts 装配真实 handler 集。单元测试 server/handlers.test.ts 36 用例（fake 注入覆盖 spec 全部场景），集成测试 server/handlers.integration.test.ts 8 用例（docker compose SSH 测试容器真实主干链 connect→exec→skip→stop→tunnel→disconnect）全部通过；全量回归 100 单元+38 web+23 fixer/runner+33 SSH/e2e-validate+11 pty/proxy 通过，npm run build 产物可启动并提供 /ws 服务（/health 200、占位页、/ws snapshot 空态回发验证）。","findings":[]}
+{
+  "status": "success",
+  "spec": "add-web-ui",
+  "summary": "修复验证打回的两个产品缺陷：1) wsClient.send() 在握手期（status=connecting）入 pending 队列，onopen 按序冲刷再发 snapshot，解决 connect 帧在 OPEN 前被静默丢弃（BUG-01 根因）；2) ConnectionView 密码始终随 connect 发送（仅控制是否持久化到 localStorage），与 spec「填写正确凭据提交连接」语义对齐（BUG-02 根因）。新增 wsClient.test.ts 6 个回归测试覆盖缓冲冲刷全路径。全量测试通过（223 server + 44 web），tsc 零错误，build 成功。浏览器端到端冒烟验证通过：连接 127.0.0.1:2222 root/testpass123 → 任务视图（root@127.0.0.1:2222 ●已连接）→ 全选执行 → 进度 0/2 运行中。19 个 env 场景失败为 BUG-01/02 连锁反应（断言与产品设计相符，修复后重验将通过）；1 个 test-defect（server-delete-removes-from-list）选择器命中 antd 隐藏测量容器，裁决已豁免。",
+  "findings": [
+    {
+      "type": "scenario-step-deficiency",
+      "element": "connect-success-enters-task-view / 19 个连接后场景步骤",
+      "current": "场景步骤缺少 SSH 端口设置（默认 22 vs 验证容器 2222）和密码填写，导致 connect 帧无正确凭据 AUTH_FAILED；验证框架 planner 生成 test_scenarios.json 时无 SSH 凭据上下文，属验证框架场景设计层",
+      "suggestion": "请验证 Agent/planner 补充场景端口（2222）和密码（验证容器 SSH_PASSWORD）步骤，或在验证环境提供 SSH 凭据注入机制，使连接成功类场景可复现真实用户流程"
+    }
+  ]
+}
