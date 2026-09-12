@@ -72,3 +72,35 @@
   - 证据：fenixd.log 04:43:43「场景 URL 端口 ['46891'] 与应用实际端口 56173 不符（planner 臆测），已改写场景端口并确认可达」；06:42:32「场景 URL 端口 ['56173'] 与应用实际端口 32841 不符（planner 臆测）」；03:46:39/11:08:10/15:16:13 多次「验证目标应用不可达，自动启动服务」。
   - 调查评估：已核实：端口改写与自动启动日志多时点出现，均指向同一链路。根因：planner 规划阶段未读取/未对齐验证契约声明的实际端口（FENIX_PORT / serve 命令端口），凭臆测生成场景 URL。归属：系统性——planner 规划与验证环境契约脱节。与存量：无现有 SPEC 覆盖端口契约对齐。结论：可作为 planner 效率改进小项。
   - 建议：验证契约中让 planner 从 serve.cmd/实际启动端口读取端口而非臆测；pm_engine 在改写端口时向 planner 上下文回写「实际端口=xxx」，后续场景直接复用；对同一 spec 端口臆测 ≥2 次时打 WARNING 并提示契约缺陷。
+
+
+## 2026-09-13
+
+### 浪费
+- （当日无）
+
+### 失误
+- **优雅退出挂起致 daemon 重启滞留 13 小时**
+  - 影响：daemon 重启请求滞留 13.2 小时（09-12 00:08→13:19 本地），期间 2 条 critical 升级告警（restart_failed）；旧进程数小时不退出只能 kill -9；修复后实测 SIGTERM 102ms 退出、客户端收到 1001 关闭帧。
+  - 证据：.fenix/admin_alerts.json id=1140cf0d9613（created 09-12 00:22 本地）与 id=46652702f5a2（created 10:32、handled 13:19）restart_failed escalation；restart_request mtime=1789142904（09-12 00:08:24 本地）；commit 48cdd5f（09-12 12:56）message 明言「进程拖了数小时不退出，只能 kill -9」。
+  - 调查评估：已核实 48cdd5f 内容：两处独立缺陷叠加——registerWsPlugin 返回的 wss 被丢弃致 upgrade 后 socket 仍挂 http 连接表、fastify.close() 永不返回；ServerContext.connections 为全仓死代码致真实 SSH 连接退出时不关闭；另有信号监听注册过晚与 process.exit 截断关闭帧两个次生问题。修复提交（12:56）后 23 分钟重启告警即处置（13:19），时间线强相关，可判定重启滞留根因即退出挂起。根因归属：add-ws-handlers（09-11）引入 WS 后 wss 未接线、add-ssh-foundation（09-10）index.ts 的 connections 从未实现，退出路径自始无进程级集成测试，属多 SPEC 叠加的系统性缺口而非单点失误。存量关系：spec/changes/ 活跃区与归档区无退出路径相关条目，48cdd5f 为 push 后直补 fix，已补 index.test.ts 5 个用例覆盖。结论：缺陷已修复，残余缺口为验证契约不含进程信号级断言，同类回归仍可能漏网。
+  - 建议：把「SIGTERM/SIGINT 后限时退出 + WS 下发 1001 关闭帧 + 无句柄残留」纳入 server 验证契约（verification-report 模板 / verify.yaml 必测项），并对 daemon 重启链补端到端断言（restart_request 必须在限时内清除，超时即升级），可复用 48cdd5f 的 index.test.ts 用例。
+
+- **push 后次日双补丁：filesRoot 装配遗漏与 TaskView 布局**
+  - 影响：内置清单文件上传在真实 index.ts 装配下报 ENOENT（敞口约 30 小时，09-11 02:35 引入→09-12 09:02 修复）；TaskView 双栏布局被 flex 样式错误挤坏（敞口约 18.5 小时，09-11 14:41 push→09-12 09:02 修复）；两缺陷均在各自验证全绿后于真实运行才暴露。
+  - 证据：commit 68b0e6e（09-12 09:02）明言「server/index.ts 装配未传 filesRoot，runner 缺省 CWD，内置清单 files 字段（相对 assets/）上传时报 ENOENT」与「TaskView 根容器误加 flexDirection:column…页签被挤到页面下方」；filesRoot 首现于 f908d9f（add-builtin-tasks-e2e 09-11 02:35 内置清单与资源）；add-web-ui verification-report 12/32 场景通过、含 playwright 浏览器级场景，但场景表集中于连接表单/连接流，无 TaskView 布局与装配接线断言。
+  - 调查评估：已核实 68b0e6e 改动两处（server/index.ts +3 行传 filesRoot、web/src/views/TaskView.tsx 补内层 row flex）与 add-web-ui 验证报告场景清单。根因归属：装配遗漏（add-builtin-tasks-e2e 引入内置清单时未同步接线 index.ts，容器验证环境 CWD 恰可解析相对路径而掩盖）属于执行层面一次性失误；TaskView 布局属 add-web-ui 验证场景覆盖缺口（浏览器级验证存在但未覆盖该页面布局）。存量关系：无活跃 SPEC 或归档条目涉及此项，两缺陷均以直补 fix 收口。结论：根因明确、已修复，残余缺口为装配完整性无单测、布局类场景无专测，复发成本低但同类集成缺口（新资产引入未验装配）仍可能再现。
+  - 建议：新增装配级单测（断言 buildServer 已传 filesRoot、内置清单文件上传走真实装配返回成功），并在 Web 验证场景表补 TaskView 双栏布局与任务详情联动断言，防同类「新 SPEC 引入资产未同步既有装配」缺口。
+
+### 可改进
+- **gitignore 漏配根级 fenix 运行时产物**
+  - 影响：复发敞口：根级 .fenix-run-result.json 已被跟踪并累计 10 次随 SPEC 收尾提交（本窗口 d156eae 09-12 09:51 再次写入提交），仅 1109 字节但含 spec 名/任务摘要等运行时信息混入源码历史；e141e98 的忽略补丁未覆盖根级，下次收尾再写根级文件即复发。
+  - 证据：git ls-files 输出根级 .fenix-run-result.json 仍在跟踪（且 .fenix/todo.md、.fenix/verify.yaml 之外唯一根级 fenix 产物）；.gitignore 仅新增 .fenix/* 与 .claude/ 规则（e141e98 09-12 11:43），无根级规则；git log -- .fenix-run-result.json 显示 10 个提交（44 条收尾提交链），d156eae 为最近一次。
+  - 调查评估：已核实 e141e98 提交：目标是「忽略 fenix 运行时产物」，实际只覆盖 .fenix/* 目录，根级结果文件与 .bak-admin-* 变体漏配；当前跟踪副本为静态快照、工作区 clean 不会自动污染，但收尾流程仍写该路径（d156eae 本次窗口即再次提交），属配置遗漏。与存量关系：无 SPEC 涉及 gitignore 治理，不支撑独立立项，宜顺手修正。结论：低严重、单行修复，建议随下次 chore 一并处理。
+  - 建议：.gitignore 追加根级 .fenix-run-result.json* 规则，并 git rm --cached .fenix-run-result.json 清理现有跟踪副本（文件保留在磁盘供 daemon 继续使用）。
+
+- **spec 验证契约缺进程级与装配级必测项**
+  - 影响：复发敞口：exit-path 与装配类缺陷在验证全绿后仍于真实运行暴露（本窗口 2 例：退出挂起致 13.2 小时重启滞留 + 2 条 critical 告警、内置清单上传 ENOENT）；单次同类复发代价即为上述实测数字。
+  - 证据：48cdd5f 与 68b0e6e 均为 push 后直补 fix，对应验证报告全绿（add-web-ui 12/32 场景、improve-execution-flow 12/12 场景、8.59M 增量 token 缓存复用）；48cdd5f 引入的 index.test.ts 优雅退出 5 用例即进程级必测模板的现成素材。
+  - 调查评估：已核实两份 verification-report：场景以功能路径（表单/连接流/执行语义/e2e）为主，无 SIGTERM 限时退出、无服务装配传参完整性断言。根因归属：验证契约结构性缺口——进程级与装配级两层无必测模板，缺陷只能靠真实运行回归时暴露，属系统性可改进。与存量关系：spec/changes/ 与 spec/archive/ 无验证模板演进类 SPEC，不重复、不冲突，可支撑独立立项或并入后续服务端 SPEC 基础模板。结论：改进点成立、素材齐备（48cdd5f 用例可移植），建议立项。
+  - 建议：起草 SPEC 为验证契约模板新增两层必测项：进程级（SIGTERM 限时退出、WS 1001 关闭帧、句柄残留，移植 48cdd5f 的 index.test.ts 用例）与装配级（buildServer 接线断言、Web 关键页面布局冒烟场景），并要求后续服务端/Web SPEC 默认附带。
