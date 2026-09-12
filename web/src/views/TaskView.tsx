@@ -42,47 +42,50 @@ export default function TaskView() {
         />
       )}
 
-      {/* Left: toolbar + tree */}
-      <div
-        style={{
-          width: 280,
-          flexShrink: 0,
-          borderRight: '1px solid #f0f0f0',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'auto',
-          padding: 8,
-          gap: 8,
-        }}
-      >
-        <ExecutionToolbar />
-        <TaskTree />
-      </div>
+      {/* Left + Right 横向布局：任务树在左、三页签在右（设计文档 §8 双栏）。 */}
+      <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        {/* Left: toolbar + tree */}
+        <div
+          style={{
+            width: 280,
+            flexShrink: 0,
+            borderRight: '1px solid #f0f0f0',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'auto',
+            padding: 8,
+            gap: 8,
+          }}
+        >
+          <ExecutionToolbar />
+          <TaskTree />
+        </div>
 
-      {/* Right: three-tab main area */}
-      <div style={{ flex: 1, overflow: 'hidden' }}>
-        <Tabs
-          defaultActiveKey="log"
-          style={{ height: '100%' }}
-          tabBarStyle={{ paddingLeft: 16 }}
-          items={[
-            {
-              key: 'log',
-              label: '执行日志',
-              children: <LogViewer />,
-            },
-            {
-              key: 'detail',
-              label: '任务详情',
-              children: <TaskDetailPanel task={focusedTask} status={focusedStatus} />,
-            },
-            {
-              key: 'claude',
-              label: '⚡ Claude修复',
-              children: <ClaudeTerminal />,
-            },
-          ]}
-        />
+        {/* Right: three-tab main area */}
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <Tabs
+            defaultActiveKey="log"
+            style={{ height: '100%' }}
+            tabBarStyle={{ paddingLeft: 16 }}
+            items={[
+              {
+                key: 'log',
+                label: '执行日志',
+                children: <LogViewer />,
+              },
+              {
+                key: 'detail',
+                label: '任务详情',
+                children: <TaskDetailPanel task={focusedTask} status={focusedStatus} />,
+              },
+              {
+                key: 'claude',
+                label: '⚡ Claude修复',
+                children: <ClaudeTerminal />,
+              },
+            ]}
+          />
+        </div>
       </div>
     </div>
   );

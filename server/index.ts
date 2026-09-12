@@ -90,6 +90,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerSessionHandlers(router, {
     config: new AppConfigManager({ configDir: process.cwd() }),
     builtinManifestPath: resolve(process.cwd(), 'assets/tasks.yaml'),
+    // 内置清单 files 字段相对 assets/ 目录解析（install-claude-code.sh 等），
+    // 而 runner filesRoot 缺省 CWD——此处显式对齐，否则上传报 ENOENT。
+    filesRoot: resolve(process.cwd(), 'assets'),
   });
   registerWsPlugin(fastify, { router, path: '/ws' });
 
