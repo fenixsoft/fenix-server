@@ -79,7 +79,8 @@ export class FakeConnection implements SshConnectionLike {
 
 /** 可编程 fake runner：行为由测试注入，事件逐个 emit。 */
 export class FakeRunner extends EventEmitter implements RunnerLike {
-  runCalls: string[][] = [];
+  /** run() 调用记录：taskIds + reset 选项（dependency-rerun-fix）。 */
+  runCalls: Array<{ taskIds: string[]; reset?: boolean }> = [];
   stopCalls = 0;
   retryCalls: string[] = [];
   skipCalls: string[] = [];
@@ -95,8 +96,8 @@ export class FakeRunner extends EventEmitter implements RunnerLike {
     return this.states;
   }
 
-  async run(taskIds: string[]): Promise<void> {
-    this.runCalls.push([...taskIds]);
+  async run(taskIds: string[], options?: { reset?: boolean }): Promise<void> {
+    this.runCalls.push({ taskIds: [...taskIds], reset: options?.reset });
     for (const step of this.runScript) step();
     this.emit('progress', this.completed, this.total);
     this.emit('queue-finished', { reason: 'completed' });
@@ -594,7 +595,8 @@ describe('exec', () => {
 
     await dispatch(h, JSON.stringify({ type: 'exec', payload: { taskIds: ['alpha'] } }));
 
-    expect(h.runner.runCalls).toEqual([['alpha']]);
+    expect(h.runner.runCalls[0]?.taskIds).toEqual(['alpha']);
+    expect(h.runner.runCalls[0]?.reset).toBeUndefined();
     const logs = h.channel.ofType('log') as Array<{ payload: { taskId: string; stream: string; data: string } }>;
     expect(logs[0]?.payload.taskId).toBe('alpha');
     expect(logs[0]?.payload.stream).toBe('stdout');
@@ -648,6 +650,53 @@ describe('exec', () => {
     const err = h.channel.errors().at(-1) as { payload: { message: string } };
     expect(err.payload.message).toContain('nope');
     expect(h.runner.runCalls.length).toBe(0);
+  });
+
+  it('已 success 任务非重跑不入队：执行依赖它的下游任务 → 仅下游入队（兜底过滤）', async () => {
+    const h = makeHarness();
+    await dispatch(h, connectMsg());
+    h.runner.setState('alpha', 'success');
+    h.channel.sent = [];
+
+    // beta 依赖 alpha，alpha 已 success → 闭包校验放行，runner 仅收到 beta。
+    await dispatch(h, JSON.stringify({ type: 'exec', payload: { taskIds: ['beta'] } }));
+    expect(h.channel.errors().length).toBe(0);
+    expect(h.runner.runCalls).toEqual([{ taskIds: ['beta'], reset: undefined }]);
+  });
+
+  it('已 success 任务直接执行（非重跑）→ 过滤后为空，回可区分错误不启动', async () => {
+    const h = makeHarness();
+    await dispatch(h, connectMsg());
+    h.runner.setState('alpha', 'success');
+
+    await dispatch(h, JSON.stringify({ type: 'exec', payload: { taskIds: ['alpha'] } }));
+    const err = h.channel.errors().at(-1) as { payload: { message: string } };
+    expect(err.payload.message).toContain('全部重跑');
+    expect(h.runner.runCalls.length).toBe(0);
+  });
+
+  it('rerun: true → 纳入已 success 任务并带 reset 选项启动 runner', async () => {
+    const h = makeHarness();
+    await dispatch(h, connectMsg());
+    h.runner.setState('alpha', 'success');
+
+    await dispatch(h, JSON.stringify({ type: 'exec', payload: { taskIds: ['alpha', 'beta'], rerun: true } }));
+    expect(h.channel.errors().length).toBe(0);
+    expect(h.runner.runCalls).toEqual([
+      { taskIds: ['alpha', 'beta'], reset: true },
+    ]);
+  });
+
+  it('rerun: true 且依赖已 success → 闭包校验仍放行（全量重跑语义）', async () => {
+    const h = makeHarness();
+    await dispatch(h, connectMsg());
+    h.runner.setState('alpha', 'success');
+
+    // 只勾选 beta 但开重跑：alpha 虽不入 taskIds，闭包校验按 success 放行；
+    // runner 收到 [beta] 与 reset（runner 自身按闭包补全 alpha）。
+    await dispatch(h, JSON.stringify({ type: 'exec', payload: { taskIds: ['beta'], rerun: true } }));
+    expect(h.channel.errors().length).toBe(0);
+    expect(h.runner.runCalls).toEqual([{ taskIds: ['beta'], reset: true }]);
   });
 });
 

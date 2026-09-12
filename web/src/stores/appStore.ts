@@ -100,6 +100,8 @@ export interface AppStore {
   awaitingDecision: string | null;
   /** Task whose detail is shown in the detail panel (clicked row). */
   focusedTaskId: string | null;
+  /** 「全部重跑」开关：开启时已 success 任务也被纳入执行队列（rerun 标记）。 */
+  rerunAll: boolean;
 
   // -- log ------------------------------------------------------------------
   logLines: LogLine[];
@@ -124,7 +126,11 @@ export interface AppStore {
   selectAll(): void;
   clearSelection(): void;
   focusTask(taskId: string | null): void;
-  exec(ids?: string[]): void;
+  /** 执行选中（ids 缺省取 selected）。重跑开关开启时携带 rerun 标记并纳入 success。 */
+  exec(ids?: string[], opts?: { rerun?: boolean }): void;
+  /** 一键执行全部：全任务 id 经「过滤 success + cascade 闭包」后 exec。 */
+  execAll(): void;
+  setRerunAll(enabled: boolean): void;
   stop(): void;
   retry(taskId: string): void;
   skip(taskId: string): void;
@@ -273,18 +279,29 @@ const STORAGE_KEY = 'fenix.servers';
 export const useAppStore = create<AppStore>()((set, get) => {
   // ---- local helpers (leveraged by actions) -------------------------------
 
-  /** Cascade select a task, including all transitive `requires` dependencies. */
-  function cascade(ids: string[], tasks: Task[]): string[] {
+  /**
+   * Cascade select a task, including all transitive `requires` dependencies.
+   *
+   * 依赖重跑语义（dependency-rerun-fix）：已 success 的依赖默认不纳入选中集
+   * （它们已完成，勾选下游任务时不重跑）；`keepSuccess` 开启时（「全部重跑」）
+   * 全量纳入，供重跑开关下的执行闭包使用。
+   */
+  function cascade(
+    ids: string[],
+    tasks: Task[],
+    states: Record<string, TaskStatus>,
+    keepSuccess = false,
+  ): string[] {
     const selectedSet = new Set(ids);
     const deps = new Map(tasks.map((t) => [t.id, t.requires]));
     const stack = [...selectedSet];
     while (stack.length > 0) {
       const id = stack.pop()!;
       for (const dep of deps.get(id) ?? []) {
-        if (!selectedSet.has(dep)) {
-          selectedSet.add(dep);
-          stack.push(dep);
-        }
+        if (selectedSet.has(dep)) continue;
+        if (!keepSuccess && states[dep] === 'success') continue;
+        selectedSet.add(dep);
+        stack.push(dep);
       }
     }
     return tasks.filter((t) => selectedSet.has(t.id)).map((t) => t.id);
@@ -340,6 +357,7 @@ export const useAppStore = create<AppStore>()((set, get) => {
     currentTaskTitle: null,
     awaitingDecision: null,
     focusedTaskId: null,
+    rerunAll: false,
 
     logLines: [],
     claudeOutput: '',
@@ -494,7 +512,8 @@ export const useAppStore = create<AppStore>()((set, get) => {
       const selected = new Set(get().selected);
       if (selected.has(taskId)) selected.delete(taskId);
       else selected.add(taskId);
-      set({ selected: cascade([...selected], tasks) });
+      // 级联过滤 success 依赖：勾选下游任务时已完成依赖不再被动勾选。
+      set({ selected: cascade([...selected], tasks, states) });
     },
 
     selectAll() {
@@ -503,7 +522,7 @@ export const useAppStore = create<AppStore>()((set, get) => {
       const available = tasks
         .filter((t) => !isBlocked(t, states))
         .map((t) => t.id);
-      set({ selected: cascade(available, tasks) });
+      set({ selected: cascade(available, tasks, states) });
     },
 
     clearSelection() {
@@ -514,17 +533,24 @@ export const useAppStore = create<AppStore>()((set, get) => {
       set({ focusedTaskId: taskId });
     },
 
-    exec(ids) {
+    exec(ids, opts) {
       const tasks = get().manifest?.tasks ?? [];
       const target = ids ?? get().selected;
       if (target.length === 0) return;
+      const states = get().taskStates;
+      const rerun = opts?.rerun ?? get().rerunAll;
 
-      // Optimistic UI: set the run as started and mark tasks pending.
-      const states: Record<string, TaskStatus> = {};
-      for (const t of tasks) states[t.id] = 'pending';
-      const queue = cascade(target, tasks);
+      // 先过滤已 success（重跑开关关闭时），再取 cascade 闭包（同样过滤 success
+      // 依赖，与勾选语义一致）；重跑开关开启时全量纳入。
+      const intent = rerun ? [...target] : target.filter((id) => states[id] !== 'success');
+      const queue = cascade(intent, tasks, states, rerun);
+      if (queue.length === 0) return; // 无可执行任务（全部已 success 且未开重跑）
+
+      // 仅重置本次队列任务的状态；未执行任务保留历史状态（dependency-rerun-fix）。
+      const nextStates: Record<string, TaskStatus> = { ...states };
+      for (const id of queue) nextStates[id] = 'pending';
       set({
-        taskStates: states,
+        taskStates: nextStates,
         selected: queue,
         progress: { completed: 0, total: queue.length },
         currentTaskId: null,
@@ -534,7 +560,21 @@ export const useAppStore = create<AppStore>()((set, get) => {
         runStartedAt: Date.now(),
         lastError: null,
       });
-      wsClient.send({ type: 'exec', payload: { taskIds: queue } });
+      wsClient.send({
+        type: 'exec',
+        payload: rerun ? { taskIds: queue, rerun: true } : { taskIds: queue },
+      });
+    },
+
+    execAll() {
+      const tasks = get().manifest?.tasks ?? [];
+      if (tasks.length === 0) return;
+      // 全任务 id → 经 exec 内部「过滤 success + cascade 闭包」；rerun 标记按开关。
+      get().exec(tasks.map((t) => t.id));
+    },
+
+    setRerunAll(enabled) {
+      set({ rerunAll: enabled });
     },
 
     stop() {

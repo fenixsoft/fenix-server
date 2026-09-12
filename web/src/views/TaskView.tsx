@@ -10,6 +10,7 @@
  * └────────┴────────────────────────────────────────────────┘
  */
 import { Alert, Tabs } from 'antd';
+import ExecutionSteps from '../components/ExecutionSteps';
 import ExecutionToolbar from '../components/ExecutionToolbar';
 import TaskTree from '../components/TaskTree';
 import LogViewer from '../components/LogViewer';
@@ -41,6 +42,10 @@ export default function TaskView() {
           style={{ margin: 8, marginBottom: 0 }}
         />
       )}
+
+      {/* 步骤导航条：按依赖拓扑顺序展示执行进度（错误条之下、左树+右 Tab 之上）。
+          与左树并存 —— 树保留勾选与详情，Steps 只表达执行进度。 */}
+      <ExecutionSteps />
 
       {/* Left + Right 横向布局：任务树在左、三页签在右（设计文档 §8 双栏）。 */}
       <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>

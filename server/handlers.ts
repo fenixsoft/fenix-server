@@ -83,7 +83,7 @@ export interface SshConnectionLike {
  */
 export interface RunnerLike {
   readonly snapshotStates: Readonly<Record<string, RunnerTaskStatus>>;
-  run(taskIds: string[]): Promise<void>;
+  run(taskIds: string[], options?: { reset?: boolean }): Promise<void>;
   stop(): void;
   retry(taskId: string): void;
   skip(taskId: string): void;
@@ -601,7 +601,10 @@ async function handleConnect(ctx: SessionContext, payload: Record<string, unknow
   ctx.sendManifestSnapshot();
 }
 
-/** exec：依赖闭包校验（BLOCKED_TASK 拦截）→ 物化队列并启动 runner。 */
+/**
+ * exec：依赖闭包校验（BLOCKED_TASK 拦截）→ 过滤已 success 任务（兜底，
+ * rerun 时纳入）→ 物化队列并启动 runner（rerun 时全量重置）。
+ */
 async function handleExec(ctx: SessionContext, payload: Record<string, unknown>): Promise<void> {
   const runner = ctx.runnerEngine;
   const manifest = ctx.currentManifest;
@@ -614,6 +617,7 @@ async function handleExec(ctx: SessionContext, payload: Record<string, unknown>)
   }
 
   const rawIds = Array.isArray(payload['taskIds']) ? payload['taskIds'] : [];
+  const rerun = payload['rerun'] === true;
   const taskIds = rawIds.filter((id): id is string => typeof id === 'string');
   if (taskIds.length === 0) {
     ctx.broadcast({ type: 'error', payload: { message: 'exec 消息缺少任务列表（taskIds）' } });
@@ -628,9 +632,11 @@ async function handleExec(ctx: SessionContext, payload: Record<string, unknown>)
     }
   }
 
+  const states = runner.snapshotStates;
+
   // 依赖闭包校验：任务集中任一任务存在依赖未在本次队列 → 拦截（BLOCKED_TASK）。
-  // 与前端 cascade 语义对齐：前端 exec 发送的 taskIds 应为传递依赖闭包。
-  const blocked = findBlockedTask(taskIds, manifest);
+  // 新语义（dependency-rerun-fix）：已 success 的依赖视为已满足，可不入队。
+  const blocked = findBlockedTask(taskIds, manifest, states);
   if (blocked !== null) {
     ctx.broadcast({
       type: 'error',
@@ -642,8 +648,18 @@ async function handleExec(ctx: SessionContext, payload: Record<string, unknown>)
     return;
   }
 
+  // 兜底过滤（客户端行为不可信时的正确性保障）：非重跑时剔除已 success 任务。
+  const queried = rerun ? taskIds : taskIds.filter((id) => states[id] !== 'success');
+  if (queried.length === 0) {
+    ctx.broadcast({
+      type: 'error',
+      payload: { message: '执行任务列表为空（所选任务均已成功；如需重跑请开启「全部重跑」）' },
+    });
+    return;
+  }
+
   try {
-    await runner.run(taskIds);
+    await runner.run(queried, rerun ? { reset: true } : undefined);
   } catch (err) {
     ctx.broadcast({ type: 'error', payload: { message: `执行启动失败: ${(err as Error).message}` } });
   }
@@ -902,16 +918,21 @@ function connectionErrorCode(conn: SshConnectionLike): string {
   return conn.errorCategory ?? 'UNREACHABLE';
 }
 
-/** exec 依赖闭包校验：返回首个「依赖未在本次队列」的任务（否则 null）。 */
+/**
+ * exec 依赖闭包校验：返回首个「依赖未在本次队列」的任务（否则 null）。
+ * 新语义（dependency-rerun-fix）：已 success 的依赖视为已满足，允许不入队
+ * （前端级联会过滤 success 依赖，此处与服务端兜底过滤保持同一判定）。
+ */
 function findBlockedTask(
   taskIds: readonly string[],
   manifest: TaskManifest,
+  states: Readonly<Record<string, RunnerTaskStatus>>,
 ): { taskId: string; dep: string } | null {
   const selected = new Set(taskIds);
   for (const task of manifest.tasks) {
     if (!selected.has(task.id)) continue;
     for (const dep of task.requires) {
-      if (!selected.has(dep)) return { taskId: task.id, dep };
+      if (!selected.has(dep) && states[dep] !== 'success') return { taskId: task.id, dep };
     }
   }
   return null;

@@ -202,8 +202,15 @@ export class TaskRunner extends EventEmitter {
    * Resolves when the queue finishes (completes, stops, or the last task
    * is skipped). Rejects when a selection references an unknown id or the
    * reachable dependency graph contains a cycle.
+   *
+   * Reset semantics (dependency-rerun-fix): by default only the tasks in this
+   * run's queue are reset to pending — tasks left outside the queue keep their
+   * historical state (success/skipped/…), and tasks already `success` are
+   * excluded from the queue so they are not re-executed. Passing
+   * `{ reset: true }` restores the old fresh-run behaviour: the whole manifest
+   * is reset to pending and every reachable task re-runs (「全部重跑」).
    */
-  async run(taskIds: string[]): Promise<void> {
+  async run(taskIds: string[], options?: { reset?: boolean }): Promise<void> {
     if (this.running) throw new Error('执行器已在运行中');
 
     const queue = topoSort(taskIds, this.manifest.tasks);
@@ -211,13 +218,24 @@ export class TaskRunner extends EventEmitter {
       throw new Error('任务依赖存在环，无法生成执行队列');
     }
 
-    // Fresh run: reset every manifest task to pending.
-    const nextStates: Record<string, TaskStatus> = {};
-    for (const task of this.manifest.tasks) nextStates[task.id] = 'pending';
-    this.states = nextStates;
+    const fullReset = options?.reset ?? false;
+    if (fullReset) {
+      // 全量重跑：重置 manifest 全部任务到 pending（旧 fresh-run 语义）。
+      const nextStates: Record<string, TaskStatus> = {};
+      for (const task of this.manifest.tasks) nextStates[task.id] = 'pending';
+      this.states = nextStates;
+    }
 
-    this.queue = [...queue];
-    this.runTaskIds = [...queue];
+    // 增量语义：已 success 的任务不入本次队列（保留历史成功状态，不重跑）；
+    // 全量重跑时 states 已全 pending，无 success 可跳过。
+    const effectiveQueue = fullReset
+      ? queue
+      : queue.filter((id) => this.states[id] !== 'success');
+
+    this.queue = [...effectiveQueue];
+    this.runTaskIds = [...effectiveQueue];
+    // 仅重置本次队列内任务；队列外任务保留历史状态。
+    for (const id of effectiveQueue) this.states[id] = 'pending';
     this.currentTask = null;
     this.awaitingDecision = null;
     this.stopRequested = false;

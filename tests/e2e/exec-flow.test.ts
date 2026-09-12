@@ -351,6 +351,48 @@ describe('exec-flow e2e（真实 SSH）', () => {
     await teardownSession(ws, col);
   });
 
+  it('已 success 前置不重跑：先执行 echo-ok 成功，再执行依赖它的 echo-dep → echo-ok 无重跑事件、echo-dep 成功', async () => {
+    const { ws, collector: col } = await freshSession(await fixtureYaml());
+    col.drain();
+
+    // 1) 执行无依赖任务 echo-ok → success。
+    ws.send(JSON.stringify({ type: 'exec', payload: { taskIds: ['echo-ok'] } }));
+    await col.waitFor(
+      (m) => m.type === 'task-state' && m.payload.taskId === 'echo-ok' && m.payload.status === 'success',
+    );
+    await col.waitFor(
+      (m) => m.type === 'progress' && (m.payload as { completed: number }).completed === 1,
+    );
+    col.drain(); // 丢弃首轮全部消息
+
+    // 2) 同会话执行依赖 echo-ok 的 echo-dep：依赖已 success → 视为已满足。
+    //    仅 echo-dep 进入本次队列，echo-ok 保持 success 且不重跑。
+    ws.send(JSON.stringify({ type: 'exec', payload: { taskIds: ['echo-dep'] } }));
+    const depRunning = await col.waitFor(
+      (m) => m.type === 'task-state' && m.payload.taskId === 'echo-dep' && m.payload.status === 'running',
+    );
+    expect(depRunning.payload.status).toBe('running');
+    const depDone = await col.waitFor(
+      (m) => m.type === 'task-state' && m.payload.taskId === 'echo-dep' && m.payload.status === 'success',
+    );
+    expect(depDone.payload.status).toBe('success');
+    // 第二轮进度为 1/1（仅 echo-dep 入队，echo-ok 不计入本轮 total）。
+    await col.waitFor(
+      (m) => m.type === 'progress'
+        && (m.payload as { completed: number }).completed === 1
+        && (m.payload as { total: number }).total === 1,
+    );
+
+    // 第二轮全程无 echo-ok 状态事件（无重新 running / success 重放）。
+    const second = col.drain();
+    const echoOkEvents = second.filter(
+      (m) => m.type === 'task-state' && m.payload.taskId === 'echo-ok',
+    );
+    expect(echoOkEvents).toEqual([]);
+
+    await teardownSession(ws, col);
+  });
+
   it('失败决策态：exec fail-always → failed（runner 停 awaiting-decision）→ retry 重进 running → 再 failed → skip → skipped', async () => {
     const { ws, collector: col } = await freshSession(await fixtureYaml());
 

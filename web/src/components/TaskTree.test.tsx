@@ -76,17 +76,17 @@ describe('TaskTree', () => {
     expect(within(row('C')).getByText('»')).toBeTruthy();
   });
 
-  it('级联勾选：勾选链末端任务 B 自动选中依赖 A', async () => {
+  it('级联勾选（dependency-rerun-fix）：勾选链末端任务 B 时已 success 依赖 A 不进选中集', async () => {
     const user = userEvent.setup();
-    // 先让 A 成功解锁 B
+    // 先让 A 成功解锁 B；A 已完成 → 勾选 B 时不再级联勾选 A。
     useAppStore.setState({ taskStates: { A: 'success', B: 'pending', C: 'pending' } });
     renderWithStore();
 
     await user.click(within(row('B')).getByRole('checkbox'));
 
     const s = useAppStore.getState();
-    expect(s.selected).toContain('A');
-    expect(s.selected).toContain('B');
+    expect(s.selected).toEqual(['B']);
+    expect(s.selected).not.toContain('A');
   });
 
   it('阻塞置灰：B 依赖 A 且 A 未成功时 B 的复选框禁用', () => {
@@ -121,11 +121,11 @@ describe('TaskTree', () => {
       manifest: {
         meta: { name: 't2', version: 1 },
         tasks: [
-          { id: 'B', title: '任务B', group: '组一', commands: ['echo b'] },
-          { id: 'D', title: '任务D', group: 'Claude Code', commands: ['echo d'] },
-          { id: 'E', title: '任务E', group: 'Claude Code', commands: ['echo e'] },
+          { id: 'B', title: '任务B', group: '组一', commands: ['echo b'], needs_proxy: false, requires: [], files: [] },
+          { id: 'D', title: '任务D', group: 'Claude Code', commands: ['echo d'], needs_proxy: false, requires: [], files: [] },
+          { id: 'E', title: '任务E', group: 'Claude Code', commands: ['echo e'], needs_proxy: false, requires: [], files: [] },
         ],
-      },
+      } as never,
       taskStates: { B: 'pending', D: 'pending', E: 'pending' },
     });
 

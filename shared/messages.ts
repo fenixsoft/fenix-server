@@ -53,6 +53,12 @@ export interface ConnectPayload {
 export interface ExecPayload {
   /** Ordered list of task IDs to execute. */
   taskIds: TaskId[];
+  /**
+   * 全部重跑标记（dependency-rerun-fix）：true 时服务端纳入已 success 任务
+   * 并让 runner 全量重置（「全部重跑」开关开启）。缺省 false（增量语义：
+   * 已 success 任务默认不重跑）。
+   */
+  rerun?: boolean;
 }
 
 export interface RetryPayload {

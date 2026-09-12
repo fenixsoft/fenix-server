@@ -12,8 +12,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { useAppStore, LOG_RING_LIMIT } from './appStore';
+import { wsClient } from '../wsClient';
 import { parseTaskManifest, type TaskManifest } from '@fenix/shared/schema';
-import type { ServerMessage } from '@fenix/shared/messages';
+import type { ServerMessage, ClientMessage } from '@fenix/shared/messages';
 
 // ---------------------------------------------------------------------------
 //  Fixtures
@@ -149,26 +150,29 @@ describe('cascade selection & blocking', () => {
     });
   });
 
-  it('勾选链末端任务 C 自动级联勾选 A、B', () => {
-    // C 依赖 B→A；依赖链完成后 C 解除阻塞，勾选 C 时级联带上 A、B。
+  it('勾选链末端任务 C：仅待执行任务入选中集，已 success 依赖不进选中集（dependency-rerun-fix）', () => {
+    // C 依赖 B→A；A、B 均已完成 → 勾选 C 时不再级联勾选它们。
     send({ type: 'task-state', payload: { taskId: 'A', status: 'success' } });
     send({ type: 'task-state', payload: { taskId: 'B', status: 'success' } });
     useAppStore.getState().toggleTask('C');
     const selected = useAppStore.getState().selected;
-    expect(selected).toContain('A');
-    expect(selected).toContain('B');
-    expect(selected).toContain('C');
+    expect(selected).toEqual(['C']);
   });
 
-  it('取消勾选中间任务时保留其作为其余勾选任务的依赖', () => {
+  it('级联勾选过滤 success 依赖：A 已 success 时勾选 B → 选中集仅 [B]', () => {
+    send({ type: 'task-state', payload: { taskId: 'A', status: 'success' } });
+    useAppStore.getState().toggleTask('B');
+    expect(useAppStore.getState().selected).toEqual(['B']);
+  });
+
+  it('取消勾选 success 依赖后不被级联被动加回（新语义）', () => {
     const store = useAppStore.getState();
     send({ type: 'task-state', payload: { taskId: 'A', status: 'success' } });
     send({ type: 'task-state', payload: { taskId: 'B', status: 'success' } });
-    store.toggleTask('C'); // {A,B,C}
-    store.toggleTask('B'); // 取消 B，但 B 仍是 C 的依赖 → 保留
-    const selected = useAppStore.getState().selected;
-    expect(selected).toContain('B');
-    expect(selected).toContain('C');
+    store.toggleTask('B'); // 显式勾选 B（允许重跑）→ A 作为 success 依赖不加回
+    expect(useAppStore.getState().selected).toEqual(['B']);
+    store.toggleTask('B'); // 取消 B → 选中集清空，A 不被被动加入
+    expect(useAppStore.getState().selected).toEqual([]);
   });
 
   it('全选遵循级联与阻塞规则', () => {
@@ -190,8 +194,12 @@ describe('cascade selection & blocking', () => {
   });
 
   it('清空勾选', () => {
-    useAppStore.getState().toggleTask('C');
-    useAppStore.getState().clearSelection();
+    const store = useAppStore.getState();
+    send({ type: 'task-state', payload: { taskId: 'A', status: 'success' } });
+    send({ type: 'task-state', payload: { taskId: 'B', status: 'success' } });
+    store.toggleTask('C'); // C 依赖已成功 → 可勾选
+    expect(useAppStore.getState().selected).toEqual(['C']);
+    store.clearSelection();
     expect(useAppStore.getState().selected).toEqual([]);
   });
 
@@ -308,6 +316,89 @@ describe('message reduction', () => {
   it('error 消息写入 lastError', () => {
     send({ type: 'error', payload: { code: 'UNREACHABLE', message: '无法连接服务器' } });
     expect(useAppStore.getState().lastError).toContain('无法连接服务器');
+  });
+});
+
+describe('exec 依赖重跑语义 & 执行全部（dependency-rerun-fix / execution-navigation）', () => {
+  let execSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    useAppStore.getState().loadBuiltinManifest();
+    useAppStore.setState({
+      manifest: { meta: { name: 't', version: 1 }, tasks: TASKS as never },
+      taskStates: { A: 'pending', B: 'pending', C: 'pending' },
+      rerunAll: false,
+      selected: [],
+      progress: { completed: 0, total: 0 },
+    });
+    vi.restoreAllMocks();
+    execSpy = vi.spyOn(wsClient, 'send');
+  });
+
+  /** 返回最后一次 wsClient.send 的 ClientMessage。 */
+  function lastSend() {
+    const calls = execSpy.mock.calls as unknown as Array<[ClientMessage]>;
+    return calls[calls.length - 1]?.[0] as { type: string; payload: { taskIds: string[]; rerun?: boolean } };
+  }
+
+  it('exec 仅重置本次队列任务：历史 success 保留，队列不含 success 依赖，无 rerun 标记', () => {
+    send({ type: 'task-state', payload: { taskId: 'A', status: 'success' } });
+    useAppStore.setState({ selected: ['B'] });
+
+    useAppStore.getState().exec(['B']);
+
+    const s = useAppStore.getState();
+    expect(s.taskStates['A']).toBe('success'); // 历史状态保留
+    expect(s.taskStates['B']).toBe('pending');
+    expect(s.taskStates['C']).toBe('pending');
+    expect(s.progress).toEqual({ completed: 0, total: 1 }); // 仅 B 入队
+    const sent = lastSend();
+    expect(sent.type).toBe('exec');
+    expect(sent.payload.taskIds).toEqual(['B']);
+    expect(sent.payload.rerun).toBeUndefined();
+  });
+
+  it('全部重跑开关开启 → exec 纳入已 success 任务并携带 rerun:true', () => {
+    send({ type: 'task-state', payload: { taskId: 'A', status: 'success' } });
+    useAppStore.setState({ selected: ['B'], rerunAll: true });
+
+    useAppStore.getState().exec(['B']);
+
+    const sent = lastSend();
+    expect(sent.payload.taskIds).toEqual(['A', 'B']); // 闭包包含 success 的 A
+    expect(sent.payload.rerun).toBe(true);
+  });
+
+  it('选中集全部已 success 且未开重跑 → exec 不发消息（无可执行任务）', () => {
+    send({ type: 'task-state', payload: { taskId: 'A', status: 'success' } });
+    useAppStore.setState({ selected: ['A'] });
+
+    useAppStore.getState().exec();
+
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it('execAll（未开重跑）→ 全任务过滤 success 后入队，无 rerun 标记', () => {
+    send({ type: 'task-state', payload: { taskId: 'A', status: 'success' } });
+
+    useAppStore.getState().execAll();
+
+    const sent = lastSend();
+    expect(sent.payload.taskIds).toEqual(['B', 'C']); // A 已 success → 跳过
+    expect(sent.payload.rerun).toBeUndefined();
+    expect(useAppStore.getState().progress).toEqual({ completed: 0, total: 2 });
+  });
+
+  it('execAll（开启重跑）→ 全部任务纳入（含已 success）并携带 rerun:true', () => {
+    send({ type: 'task-state', payload: { taskId: 'A', status: 'success' } });
+    useAppStore.setState({ rerunAll: true });
+
+    useAppStore.getState().execAll();
+
+    const sent = lastSend();
+    expect(sent.payload.taskIds).toEqual(['A', 'B', 'C']);
+    expect(sent.payload.rerun).toBe(true);
+    expect(useAppStore.getState().progress).toEqual({ completed: 0, total: 3 });
   });
 });
 
