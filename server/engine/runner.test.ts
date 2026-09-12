@@ -536,3 +536,88 @@ describe('TaskRunner 串行执行', () => {
     expect(runner.taskDef('B')?.title).toBe('B');
   });
 });
+
+// ---------------------------------------------------------------------------
+//  依赖重跑语义（dependency-rerun-fix）：子集执行不抹历史状态
+// ---------------------------------------------------------------------------
+
+describe('TaskRunner 重跑语义（dependency-rerun-fix）', () => {
+  it('执行子集不抹掉历史状态：A 已 success 再执行依赖 A 的 B → A 保持 success 且不重跑', async () => {
+    const tasks = [
+      task('A'),
+      task('B', { requires: ['A'] }),
+    ];
+    const { runner, executor } = setup(tasks);
+
+    // 第一轮：仅执行 A → success
+    await runner.run(['A']);
+    expect(runner.snapshot().states['A']).toBe('success');
+    expect(executor.invocations).toEqual(['echo A']);
+
+    // 第二轮：执行 B（依赖 A）。A 已 success → 不入队、不重跑、状态保留。
+    await runner.run(['B']);
+    const snap = runner.snapshot();
+    expect(snap.states['A']).toBe('success');
+    expect(snap.states['B']).toBe('success');
+    // A 的命令未被再次调用（无重跑）
+    expect(executor.invocations).toEqual(['echo A', 'echo B']);
+  });
+
+  it('subset 执行时队列外任务保留历史状态（success 不进本次 total）', async () => {
+    const tasks = [
+      task('A'),
+      task('B', { requires: ['A'] }),
+      task('C'),
+    ];
+    const { runner, executor } = setup(tasks);
+
+    await runner.run(['A']);
+    expect(runner.snapshot().states['A']).toBe('success');
+
+    // 只执行 C（无依赖）：队列仅 [C]，total 为 1，A 保持 success。
+    await runner.run(['C']);
+    const snap = runner.snapshot();
+    expect(snap.total).toBe(1);
+    expect(snap.completed).toBe(1);
+    expect(snap.states['A']).toBe('success');
+    expect(snap.states['C']).toBe('success');
+    expect(executor.invocations).toEqual(['echo A', 'echo C']);
+  });
+
+  it('全量重跑（reset: true）→ 全部任务重置 pending 后按拓扑顺序重新执行', async () => {
+    const tasks = [
+      task('A'),
+      task('B', { requires: ['A'] }),
+    ];
+    const { runner, executor } = setup(tasks);
+
+    // 第一轮：A、B 全部 success。
+    await runner.run(['A', 'B']);
+    expect(executor.invocations).toEqual(['echo A', 'echo B']);
+
+    // 第二轮全量重跑：A、B 再次执行（reset: true → 全 manifest 重置 pending）。
+    await runner.run(['A', 'B'], { reset: true });
+    const snap = runner.snapshot();
+    expect(snap.states['A']).toBe('success');
+    expect(snap.states['B']).toBe('success');
+    expect(snap.total).toBe(2);
+    expect(executor.invocations).toEqual(['echo A', 'echo B', 'echo A', 'echo B']);
+  });
+
+  it('reset: true 且选择子集 → 仍按传递闭包执行全部可达任务', async () => {
+    const tasks = [
+      task('A'),
+      task('B', { requires: ['A'] }),
+    ];
+    const { runner, executor } = setup(tasks);
+
+    await runner.run(['A', 'B']);
+    expect(executor.invocations).toEqual(['echo A', 'echo B']);
+
+    // 全重跑只勾选 B：闭包 [A, B]，A 也被重置并重跑。
+    await runner.run(['B'], { reset: true });
+    expect(runner.snapshot().states['A']).toBe('success');
+    expect(runner.snapshot().states['B']).toBe('success');
+    expect(executor.invocations).toEqual(['echo A', 'echo B', 'echo A', 'echo B']);
+  });
+});
