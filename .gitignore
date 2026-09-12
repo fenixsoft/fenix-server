@@ -7,3 +7,12 @@ config.json
 # E2E 运行时产物（失败快照）
 tests/e2e/out/
 .playwright-cli/
+
+# fenix 框架运行时产物（仅版本化框架自跟踪的 todo.md / verify.yaml；
+# 其余为 daemon 状态/run 转录/日志/会话配置，含软链与对话记录，不版本化）
+.fenix/*
+!.fenix/todo.md
+!.fenix/verify.yaml
+
+# 本地 Claude 会话产物
+.claude/

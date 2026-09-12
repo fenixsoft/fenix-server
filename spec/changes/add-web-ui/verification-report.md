@@ -208,3 +208,8 @@ Call log:
   - waiting for locator("button:has-text('断')").first to be visible
  |
 | server-delete-removes-from-list | element_not_exist [text=待删服务器] 已删除服务器不在列表 | test-defect | 测试用例自身缺陷（非产品缺陷） | 断言选择器 text= 命中 antd 隐藏测量容器（0×0），非产品缺陷；已复现删除成功（重开下拉为[]、选中态清零） |
+
+## 本轮场景集变更
+
+场景集与持久化集一致，无变更。
+

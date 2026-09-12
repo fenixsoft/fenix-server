@@ -43,3 +43,8 @@
 | cli-docker-setup | exit_code 期望0 实际1：docker compose up --build -d | env | 环境因素（非产品缺陷） | 容器硬编码名 fenix-sshd-test 与带外残留容器冲突（先前 run 遗留，down 未清掉）；清理残留后复现通过，非产品缺陷 |
 | cli-tunnel-port | exit_code 期望0 实际1：vitest 运行首个空闲端口\|跳过 20122\|端口被占 | env | 环境因素（非产品缺陷） | 级联自 cli-docker-setup 容器名冲突（环境残留），同 root cause；清理残留容器后同命令复现 3 passed，非产品缺陷 |
 | cli-tunnel-lifecycle | exit_code 期望0 实际1：vitest 运行重复 open\|显式关闭\|SSH 断开 | env | 环境因素（非产品缺陷） | 级联自 cli-docker-setup 容器名冲突（环境残留），同 root cause；清理残留容器后同命令复现 3 passed，非产品缺陷 |
+
+## 本轮场景集变更
+
+场景集与持久化集一致，无变更。
+
