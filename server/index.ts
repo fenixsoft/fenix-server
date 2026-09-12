@@ -7,7 +7,8 @@
  *   - Static hosting of web build output; placeholder response when the
  *     static directory is missing or empty (web/ is owned by add-web-ui)
  *   - /ws WebSocket endpoint (see ws.ts)
- *   - SIGINT/SIGTERM graceful shutdown: close HTTP + active SSH connections
+ *   - SIGINT/SIGTERM graceful shutdown: 断开 WS → 清理会话（隧道 + SSH）→
+ *     关 HTTP。顺序不可调换，详见 buildServer 内注释。
  *   - Auto-open browser hook kept as an interface (disabled in headless env)
  *
  * Usage:
@@ -17,23 +18,36 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { SshConnection } from './ssh/connection.js';
 import { AppConfigManager } from './config.js';
-import { MessageRouter, registerWsPlugin } from './ws.js';
-import { registerSessionHandlers } from './handlers.js';
+import { MessageRouter, registerWsPlugin, closeWsChannel } from './ws.js';
+import { registerSessionHandlers, type SessionContext } from './handlers.js';
+import { waitAtMost } from './timing.js';
 
 export const DEFAULT_PORT = 3773;
 export const ALLOWED_HOST = '127.0.0.1';
+
+/** 会话资源清理（隧道注销需一次 SSH 往返）的等待上限；超时则放弃等待继续关闭。 */
+export const SESSION_TEARDOWN_TIMEOUT_MS = 2_000;
+
+/** 尝试打开浏览器的等待上限；外部命令不返回时不能拖住启动。 */
+export const BROWSER_OPEN_TIMEOUT_MS = 1_000;
+
+// `context` 由 buildServer 通过 decorate 挂载（见 ServerContext）。
+declare module 'fastify' {
+  interface FastifyInstance {
+    context: ServerContext;
+  }
+}
 
 // ---------------------------------------------------------------------------
 //  Server context — tracks active resources for graceful shutdown
 // ---------------------------------------------------------------------------
 
 export interface ServerContext {
-  /** Active SSH connections to close on shutdown. */
-  connections: Set<SshConnection>;
-  /** Called by main() before exiting; used by tests to tear down. */
-  close?: () => Promise<void>;
+  /** 会话上下文：持有 SSH 连接 / 隧道 / 引擎，关闭时需 teardown。 */
+  session: SessionContext;
+  /** 关闭服务：断开 WS 与会话资源后再关 HTTP。幂等。 */
+  close: () => Promise<void>;
 }
 
 export interface BuildServerOptions {
@@ -45,8 +59,6 @@ export interface BuildServerOptions {
   staticDir?: string;
   /** Router for /ws; a default one is created if omitted. */
   router?: MessageRouter;
-  /** Shared context; a fresh one is created if omitted. */
-  context?: ServerContext;
 }
 
 /**
@@ -87,31 +99,45 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   // fixWithClaude/pty-input/tunnel-open/tunnel-test/disconnect/snapshot）。
   // 单会话语义：SessionContext 随 buildServer 创建，所有 /ws 连接共享。
   const router = options.router ?? new MessageRouter();
-  registerSessionHandlers(router, {
+  const session = registerSessionHandlers(router, {
     config: new AppConfigManager({ configDir: process.cwd() }),
     builtinManifestPath: resolve(process.cwd(), 'assets/tasks.yaml'),
     // 内置清单 files 字段相对 assets/ 目录解析（install-claude-code.sh 等），
     // 而 runner filesRoot 缺省 CWD——此处显式对齐，否则上传报 ENOENT。
     filesRoot: resolve(process.cwd(), 'assets'),
   });
-  registerWsPlugin(fastify, { router, path: '/ws' });
+  const wss = registerWsPlugin(fastify, { router, path: '/ws' });
 
-  // Graceful shutdown: track active SSH connections.
-  const context: ServerContext = options.context ?? { connections: new Set() };
+  // 关闭顺序不可调换：先断开 WS，再清理会话（隧道 + SSH 连接），最后才是
+  // HTTP。upgrade 之后的 socket 仍挂在 http server 的连接表里，不先断开，
+  // `server.close()` 会一直等连接排空 —— 表现为收到 SIGTERM 后「不退出」。
+  // 幂等：onClose 钩子与 context.close() 都走这里，重复调用复用同一 promise。
+  let resourcesClosed: Promise<void> | null = null;
+  const closeResources = (): Promise<void> => {
+    resourcesClosed ??= (async () => {
+      await closeWsChannel(wss);
 
-  const shutdown = async () => {
-    fastify.log.info('正在关闭服务…');
-    for (const conn of context.connections) conn.close();
-    context.connections.clear();
-    await fastify.close();
+      // teardown 内含一次 SSH 往返（隧道注销），对端失联时回调可能永不触发；
+      // 限时等待，超时则放弃清理继续关闭（进程随后退出会由内核回收 socket）。
+      const finished = await waitAtMost(session.teardown(), SESSION_TEARDOWN_TIMEOUT_MS);
+      if (!finished) {
+        fastify.log.warn(`会话清理超过 ${SESSION_TEARDOWN_TIMEOUT_MS}ms 未完成，放弃等待并继续关闭`);
+      }
+    })();
+    return resourcesClosed;
   };
 
-  fastify.addHook('onClose', async () => {
-    for (const conn of context.connections) conn.close();
-    context.connections.clear();
-  });
+  const context: ServerContext = {
+    session,
+    close: async () => {
+      fastify.log.info('正在关闭服务…');
+      await closeResources();
+      await fastify.close();
+    },
+  };
 
-  context.close = shutdown;
+  // 直接调用 fastify.close()（测试 / 嵌入方）时同样清理资源。
+  fastify.addHook('onClose', closeResources);
 
   // Attach context for tests / consumers.
   fastify.decorate('context', context);
@@ -152,23 +178,34 @@ export async function main(options: MainOptions = {}): Promise<void> {
     const bound = typeof addr === 'object' && addr ? `http://${addr.address}:${addr.port}` : `http://${host}:${port}`;
     fastify.log.info(`Fenix Server 已启动: ${bound}`);
 
-    if (!shouldAutoOpenBrowser(options.noBrowser)) {
-      await openBrowser(bound).catch(() => {}); // best effort only
-    }
-
-    // Graceful shutdown on SIGINT / SIGTERM.
+    // 信号监听尽早注册：注册之前的 SIGTERM/SIGINT 会被系统默认处理直接杀掉
+    // 进程，既没有优雅清理也看不到任何日志。
     let exiting = false;
     const shutdown = async (signal: string) => {
-      if (exiting) return;
+      if (exiting) {
+        // 第二次信号：清理卡住时的强制出口（Ctrl+C 连按两次）。
+        fastify.log.warn(`再次收到 ${signal}，强制退出`);
+        process.exit(1);
+      }
       exiting = true;
       fastify.log.info(`收到 ${signal}，开始优雅退出`);
-      const context = (fastify as unknown as { context?: ServerContext }).context;
-      for (const conn of context?.connections ?? []) conn.close();
-      await fastify.close();
-      process.exit(0);
+      await fastify.context.close();
+      // 不立即 process.exit：留出时间让已排队的 close 帧等写出落地（否则
+      // 客户端看到的是 1006 异常断开而非 1001）。unref 后若无其它句柄，
+      // 进程自然退出；仍有残留句柄时由该定时器兜底强制退出。
+      setTimeout(() => {
+        fastify.log.warn('仍有句柄残留，强制退出');
+        process.exit(0);
+      }, 200).unref();
     };
     process.on('SIGINT', () => void shutdown('SIGINT'));
     process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
+    if (shouldAutoOpenBrowser(options.noBrowser)) {
+      // 尽力而为，且必须有上限：`xdg-open` 等外部命令在无头环境里可能不返回，
+      // 不能让它把启动流程挂在这里。
+      await waitAtMost(openBrowser(bound), BROWSER_OPEN_TIMEOUT_MS);
+    }
   } catch (err) {
     fastify.log.error(err);
     process.exitCode = 1;

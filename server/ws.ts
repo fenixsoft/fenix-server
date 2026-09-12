@@ -16,6 +16,7 @@
 import { WebSocketServer, WebSocket, type ServerOptions } from 'ws';
 import type { FastifyInstance } from 'fastify';
 import type { ClientMessage, ServerMessage } from '../shared/messages.js';
+import { waitAtMost } from './timing.js';
 
 // ---------------------------------------------------------------------------
 //  Router
@@ -130,6 +131,51 @@ export function registerWsPlugin(
   });
 
   return wss;
+}
+
+// ---------------------------------------------------------------------------
+//  关闭
+// ---------------------------------------------------------------------------
+
+/** 优雅关闭期：等待客户端回应 close 帧的上限，超时强制断开。 */
+export const WS_CLOSE_GRACE_MS = 200;
+
+/**
+ * 关闭 WS 通道：先拒绝新的升级请求，再断开全部已连接客户端
+ * （限时优雅关闭 → 强制断开）。
+ *
+ * 必须在 `fastify.close()` 之前完成 —— `upgrade` 之后的 socket 仍挂在
+ * http server 的连接表里，不主动断开会让 `server.close()` 一直等下去，
+ * 进程收到 SIGTERM 后表现为「不退出」的挂死。幂等。
+ */
+export async function closeWsChannel(
+  wss: WebSocketServer,
+  graceMs: number = WS_CLOSE_GRACE_MS,
+): Promise<void> {
+  // 停止接受新升级：此后的握手由 ws 以 503 拒绝（不会抛错）。
+  wss.close();
+
+  const clients = [...wss.clients];
+  if (clients.length === 0) return;
+
+  let remaining = clients.length;
+  const drained = new Promise<void>((resolve) => {
+    for (const client of clients) {
+      client.once('close', () => {
+        remaining -= 1;
+        if (remaining === 0) resolve();
+      });
+    }
+  });
+
+  for (const client of clients) {
+    client.close(1001, 'server shutting down'); // 1001 = going away
+  }
+
+  await waitAtMost(drained, graceMs);
+
+  // 优雅期结束仍在的（含期间新接入的）一律强制断开。
+  for (const client of wss.clients) client.terminate();
 }
 
 // ---------------------------------------------------------------------------
