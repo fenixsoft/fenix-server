@@ -21,3 +21,14 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
     dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
 }
+
+// jsdom 未实现 ResizeObserver —— ClaudeTerminal / LogViewer 的 xterm fit
+// 自适应监听使用。提供最小 stub（不触发回调）让组件测试可挂载。
+if (typeof window !== 'undefined' && typeof (window as { ResizeObserver?: unknown }).ResizeObserver === 'undefined') {
+  class ResizeObserverStub {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  (window as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+}
